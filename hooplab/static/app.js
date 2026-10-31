@@ -407,7 +407,7 @@ const RENDER = {
       if (extra.actions?.length) {
         const a = document.createElement("div"); a.className = "acts";
         a.innerHTML = extra.actions.map((x) => x.playlist_id ? `<button type="button" class="btn line small" data-pl="${x.playlist_id}">Watch the playlist</button>`
-          : `<span class="did">${esc(x.kind.replace(/_/g, " "))}${x.stored ? `: ${x.stored} stored` : ""}${x.count ? `: ${x.count}` : ""}</span>`).join("");
+          : `<span class="did">${esc(x.kind === "plan" ? "Practice plan saved" : x.kind.replace(/_/g, " "))}${x.stored ? `: ${x.stored} stored` : ""}${x.count ? `: ${x.count}` : ""}</span>`).join("");
         $$("[data-pl]", a).forEach((b) => b.addEventListener("click", () => openPlaylist(b.dataset.pl)));
         d.appendChild(a);
       }
@@ -516,10 +516,10 @@ const RENDER = {
       <header class="page-head"><h1>${rows.length ? `${open ? `<em>${open} item${open === 1 ? "" : "s"}</em> still open this week.` : "All homework is done."}` : "Give every player two things to work on."}</h1>
         <p class="lede">Two items per player from their biggest needs, each with their own possessions to watch first. Logged results count as evidence, at lower weight than games.</p>
         <div class="actions"><button type="button" class="btn" id="assign">Assign this week's homework</button>${rows.length ? `<span class="note">${open} open, ${rows.length - open} done</span>` : ""}</div></header>
-      ${rows.length ? `<section aria-label="This week's homework"><div class="tbl"><table><thead><tr><th>Player</th><th>Drill</th><th>Target</th><th>Due</th><th class="r">Result</th></tr></thead><tbody>
+      ${rows.length ? `<section aria-label="This week's homework"><div class="tbl"><table class="hw"><thead><tr><th>Player</th><th>Drill</th><th>Target</th><th>Due</th><th class="r">Result</th></tr></thead><tbody>
       ${rows.map((h, i) => `<tr><td class="nm">${i === 0 || rows[i - 1].player !== h.player ? esc(h.player) : ""}</td>
         <td>${esc(h.drill?.name)}<span class="sub">${esc(SHORT[h.dimension] || "")}: ${esc(h.drill?.setup)}</span>${h.playlist_id ? `<button type="button" class="btn quiet small" data-pl="${h.playlist_id}">Watch first</button>` : ""}</td>
-        <td>${esc(h.target)}</td><td style="white-space:nowrap">${day(h.due)}</td>
+        <td data-l="Target">${esc(h.target)}</td><td data-l="Due" style="white-space:nowrap">${day(h.due)}</td>
         <td class="r">${h.status === "done" ? `<span class="up">Done${h.attempts ? ` ${h.made}/${h.attempts}` : ""}</span>` : `<button type="button" class="btn line small" data-h="${h.id}">Log result</button>`}</td></tr>`).join("")}
       </tbody></table></div></section>` : `<p class="empty"><b>Nothing assigned yet.</b> Assign the week and every player gets two items from their own numbers.</p>`}</div>`;
     $("#assign").addEventListener("click", async () => {
