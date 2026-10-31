@@ -455,11 +455,12 @@ def session_video(session_id: int):
 @app.get("/api/teams/{team_id}/clips")
 def team_clips(team_id: int, player_id: int | None = None, dimension: str | None = None,
                outcome: bool | None = None, play_type: str | None = None, opponent_id: int | None = None,
-               limit: int = 30):
+               session_id: int | None = None, limit: int = 30):
     """Every number opens its film: the possessions behind a stat, as clip windows."""
     _get("teams", team_id)
     _check_filters(dimension, play_type)
-    return insights.clips(db, team_id, player_id, dimension, outcome, play_type, opponent_id, min(limit, 200))
+    return insights.clips(db, team_id, player_id, dimension, outcome, play_type, opponent_id, min(limit, 300),
+                          session_id=session_id)
 
 
 @app.post("/api/teams/{team_id}/playlists", status_code=201)

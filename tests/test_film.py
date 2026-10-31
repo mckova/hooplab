@@ -132,6 +132,10 @@ def test_demo_film_is_rendered_and_every_clip_plays(film_client):
     assert len(clips) >= 15
     v = c.get(clips[0]["video_url"])
     assert v.status_code == 200 and v.headers["content-type"] == "video/mp4" and len(v.content) > 10_000
+    sid = clips[0]["session_id"]                       # the film review asks for one session's moments
+    one = c.get(f"/api/teams/{tid}/clips?session_id={sid}&limit=300").json()
+    assert one and all(x["session_id"] == sid for x in one)
+    assert c.get(f"/api/teams/{tid}/clips?session_id=999999").json() == []
     pl = c.post(f"/api/teams/{tid}/playlists", json={"title": "Made shots", "dimension": "rim_finishing",
                                                      "outcome": True}).json()
     got = c.get(f"/api/playlists/{pl['id']}").json()

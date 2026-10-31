@@ -9,13 +9,18 @@ const nf = new Intl.NumberFormat("en-US");
 const dateFmt = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short" });
 const day = (iso) => (iso ? dateFmt.format(new Date(iso)) : "");
 const first = (name) => String(name || "").trim().split(/\s+/)[0];
-let TEAM = null, META = null, DRILLS = {}, VIEW = "today", PLAYER = null, OPP = null;
+let TEAM = null, META = null, DRILLS = {}, VIEW = "today", PLAYER = null, OPP = null, FILM = null;
 
 // Short labels for the ten skills; the model's long names stay in tooltips and reports.
 const SHORT = { rim_finishing: "Rim", midrange: "Mid-range", three_point: "Three", free_throw: "Free throws",
   ball_security: "Ball security", playmaking: "Playmaking", on_ball_defense: "On-ball D", help_defense: "Help D",
   rebounding: "Rebounding", transition: "Transition" };
 const GROUPS = [["scoring", "Scoring"], ["playmaking", "Playmaking"], ["defense", "Defense and boards"], ["athletic", "Effort"]];
+// The same skills as a coach would say them in a sentence.
+const PHRASE = { rim_finishing: "finishing at the rim", midrange: "the mid-range shot", three_point: "three-point shooting", free_throw: "free throws",
+  ball_security: "taking care of the ball", playmaking: "creating for others", on_ball_defense: "on-ball defense", help_defense: "help defense",
+  rebounding: "rebounding", transition: "getting back in transition" };
+const cap = (t) => t.charAt(0).toUpperCase() + t.slice(1);
 const short = (d) => SHORT[d] || META.dimensions[d]?.name || d;
 
 const svg = (d) => `<svg class="i" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
@@ -30,8 +35,8 @@ const ICON = {
   mic: svg('<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0013 0M12 17.5V21"/>'),
   send: svg('<path d="M5 12h13M13 6l6 6-6 6"/>'),
 };
-const VIEWS = [["today", "Today"], ["assistant", "Assistant"], ["roster", "Roster"], ["practice", "Practice plan"],
-  ["homework", "Homework"], ["opponents", "Opponents"], ["film", "Film room"]];
+const VIEWS = [["today", "Home"], ["film", "Film"], ["roster", "Players"], ["practice", "Practice"],
+  ["homework", "Homework"], ["opponents", "Opponents"], ["assistant", "Assistant"]];
 
 async function api(path, opts = {}) {
   const init = { ...opts };
@@ -106,6 +111,17 @@ const setLang = (l) => $$(".seg [data-lang]").forEach((x) => x.setAttribute("ari
 const LANG = () => $(".seg [aria-pressed=true]")?.dataset.lang || "en";
 async function syncLang() { if (TEAM) setLang((await api(`/api/teams/${TEAM}/settings`)).language || "en"); }
 
+// Light and dark. The choice is kept on this device; the first visit follows the system.
+const THEME = () => document.documentElement.dataset.theme || "dark";
+function setTheme(t) {
+  document.documentElement.dataset.theme = t; localStorage.setItem("hooplab-theme", t);
+  $$("[data-theme-set]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.themeSet === t)));
+}
+$$("[data-theme-set]").forEach((b) => b.addEventListener("click", () => setTheme(b.dataset.themeSet)));
+$$("[data-theme-set]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.themeSet === THEME())));
+document.addEventListener("click", (e) => { const m = $("details.more[open]"); if (m && !m.contains(e.target)) m.open = false; });
+$("#askBar").addEventListener("submit", (e) => { e.preventDefault(); const q = $("#askInput").value.trim(); if (!q || !TEAM) return; $("#askInput").value = ""; ask(q); });
+
 // "Ask about this" from any page: opens the assistant with what the coach is looking at.
 let PENDING_ASK = null;
 function ask(question, context) { PENDING_ASK = { question, context }; go("assistant"); }
@@ -157,6 +173,7 @@ document.addEventListener("keydown", (e) => {
 
 // ---------------------------------------------------------------- film: the clip player
 const ptName = (k) => META.play_types[k] || k;
+const KIND = { game: "Game", practice: "Practice", scrimmage: "Scrimmage" };
 const TYPE_WORD = { shot: "Shot", pass: "Pass", turnover: "Turnover", touch: "Touch", creation: "Created shot", defense: "Defense", rotation: "Rotation", steal: "Steal", rebound: "Rebound", sprint: "Sprint back" };
 const ZONE_WORD = { rim: "at the rim", mid: "mid-range", three: "from three", ft: "free throw" };
 function clipLabel(c) {
@@ -186,10 +203,6 @@ async function openClips(title, params) {
   clipPlayer(title, await api(`/api/teams/${TEAM}/clips?${q}`));
 }
 async function openPlaylist(id) { const pl = await api(`/api/playlists/${id}`); clipPlayer(pl.title, pl.clips, pl.note || ""); }
-async function sessionFilm(id, title) {
-  const all = await api(`/api/teams/${TEAM}/clips?limit=200`);
-  clipPlayer(title, all.filter((c) => c.session_id === Number(id)));
-}
 
 function playTypeTable(r, playable) {
   if (!r.play_types.length) return `<p class="empty">No play types tagged yet. Tag possessions in the film room (pick and roll, spot-up, post-up) and this table shows what scores.</p>`;
@@ -240,10 +253,10 @@ function shotChart(card) {
   const tint = (s) => {
     const g = (s.mean - s.baseline) / Math.max(0.05, s.baseline);
     const a = Math.min(0.32, 0.06 + Math.abs(g) * 0.5);
-    return Math.abs(g) < 0.04 ? "transparent" : g > 0 ? `rgb(29 122 71 / ${a})` : `rgb(180 35 24 / ${a})`;
+    return Math.abs(g) < 0.04 ? "transparent" : `color-mix(in srgb, var(--${g > 0 ? "good" : "bad"}) ${Math.round(a * 100)}%, transparent)`;
   };
   const zone = (k, shape, lx, ly, sy = 18) => `<g class="zone" tabindex="0" role="button" data-zone="${k}" aria-label="${esc(S[k].name)}: ${pct(S[k].mean)}, expected ${pct(S[k].baseline)}. Watch the shots.">
-      ${shape.replace("/>", ` class="hit" fill="${tint(S[k])}"/>`)}
+      ${shape.replace("/>", ` class="hit" style="fill:${tint(S[k])}"/>`)}
       <text class="zl" x="${lx}" y="${ly}" text-anchor="middle">${pct(S[k].mean)}</text>
       <text class="zs" x="${lx}" y="${ly + sy}" text-anchor="middle">${esc(SHORT[k])}, exp. ${pct(S[k].baseline)}</text></g>`;
   // 10 units per foot; basket at (250, 52.5); three-point arc 23.75 ft, corners at x = 30 and 470.
@@ -257,46 +270,41 @@ function shotChart(card) {
     <circle class="ln" cx="250" cy="52.5" r="7.5"/>
   </svg>`;
 }
-function progressChart(h, dims, colors) {
-  const W = 560, H = 200, L = 34, R = 10, T = 12, B = 26, n = h.dates.length;
+function progressChart(h, dims, colors, width = 560) {
+  const W = Math.max(320, Math.round(width)), H = 220, L = 34, R = 10, T = 12, B = 26, n = h.dates.length;
   const x = (i) => L + (i * (W - L - R)) / Math.max(1, n - 1);
   const all = dims.flatMap((d) => h.series[d]);
   const lo = Math.max(0, Math.floor((Math.min(...all) - 0.05) * 10) / 10), hi = Math.min(1, Math.ceil((Math.max(...all) + 0.05) * 10) / 10);
   const y = (v) => T + (1 - (v - lo) / (hi - lo || 1)) * (H - T - B);
   const grid = [lo, (lo + hi) / 2, hi].map((v) => `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="var(--line)"/><text x="0" y="${y(v) + 4}">${Math.round(v * 100)}%</text>`).join("");
-  const lines = dims.map((d, k) => `<polyline fill="none" stroke="${colors[k]}" stroke-width="2" stroke-linejoin="round" points="${h.series[d].map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ")}"/>
-    <circle cx="${x(n - 1)}" cy="${y(h.series[d][n - 1])}" r="3.5" fill="${colors[k]}"/>`).join("");
+  const lines = dims.map((d, k) => `<polyline fill="none" style="stroke:${colors[k]}" stroke-width="2" stroke-linejoin="round" points="${h.series[d].map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ")}"/>
+    <circle cx="${x(n - 1)}" cy="${y(h.series[d][n - 1])}" r="3.5" style="fill:${colors[k]}"/>`).join("");
   const ticks = [0, Math.floor((n - 1) / 2), n - 1].map((i) => `<text x="${x(i)}" y="${H - 6}" text-anchor="middle">${day(h.dates[i])}</text>`).join("");
   return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Skill estimates week by week">${grid}${lines}${ticks}</svg>`;
 }
-const SERIES = ["#14171c", "#b8430f", "#2f6f9f", "#1d7a47", "#8a6d1f", "#7a4a8a"];
+const SERIES = ["var(--ink)", "var(--accent)", "var(--them)", "var(--good)", "var(--bad)", "var(--ink-faint)"];
 
 // ---------------------------------------------------------------- first run (no team yet)
 function firstRun() {
   $("#main").innerHTML = `<div class="first">
     <div>
-      <div class="wordmark"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9.5" fill="#b8430f"/><path d="M2.5 12h19M12 2.5v19M5.2 5.4c3.3 3.3 3.3 9.9 0 13.2M18.8 5.4c-3.3 3.3-3.3 9.9 0 13.2" fill="none" stroke="#fff8f2" stroke-width="1.3"/></svg>HoopLab</div>
+      <div class="wordmark">HoopLab</div>
       <h1>Know every player before you draw up the week.</h1>
       <p class="lede">Bring your roster and film. HoopLab learns each player and plans practice with you.</p>
       <form id="startForm"><label class="sr-only" for="startName">Team name</label><input id="startName" name="name" required autocomplete="off" placeholder="Your team's name"><button class="btn">Start</button></form>
       <p class="or">Or <button type="button" class="btn quiet" id="startDemo">open a demo team</button> with ten weeks of games already tagged.</p>
     </div>
-    <figure class="board" aria-hidden="true" style="margin:0">
+    <figure class="board glass" aria-hidden="true" style="margin:0">
       <svg viewBox="0 0 520 380">
-        <rect class="floor" x="1" y="1" width="518" height="378" rx="6"/>
-        <path class="ln" d="M20 30H500 M180 30V230H340V30 M200 230A60 60 0 0 0 320 230 M40 30V150A240 240 0 0 0 480 150V30 M230 62H290"/>
-        <circle class="ln" cx="260" cy="76" r="8"/>
-        <path class="run draw" d="M262 300C300 296 330 280 352 250" marker-end="url(#ah)"/>
-        <path class="pass" d="M168 262C200 290 230 300 258 302"/>
-        <path class="run draw d2" d="M120 168C150 140 190 128 228 112" marker-end="url(#ah)"/>
-        <path class="screen" d="M282 318L304 334"/>
-        <defs><marker id="ah" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10" fill="none" stroke="#b8430f" stroke-width="2"/></marker></defs>
-        <circle class="o" cx="260" cy="342" r="15"/><text class="lbl" x="260" y="348" text-anchor="middle">1</text>
-        <circle class="o" cx="296" cy="326" r="15"/><text class="lbl" x="296" y="332" text-anchor="middle">5</text>
-        <circle class="o" cx="150" cy="250" r="15"/><text class="lbl" x="150" y="256" text-anchor="middle">2</text>
-        <circle class="o" cx="420" cy="190" r="15"/><text class="lbl" x="420" y="196" text-anchor="middle">3</text>
-        <circle class="o" cx="104" cy="182" r="15"/><text class="lbl" x="104" y="188" text-anchor="middle">4</text>
-        <path class="x" d="M250 296l14 14M264 296l-14 14 M300 290l12 12M312 290l-12 12 M168 214l12 12M180 214l-12 12 M392 172l12 12M404 172l-12 12 M196 138l12 12M208 138l-12 12"/>
+        <rect class="floor" x="0" y="0" width="520" height="380" rx="16"/>
+        <g class="ln"><path d="M20 24H500V356H20Z M180 24V224H340V24 M200 224A60 60 0 0 0 320 224 M40 24V144A240 240 0 0 0 480 144V24 M230 56H290"/><circle cx="260" cy="70" r="8"/></g>
+        <path class="trail us draw" d="M262 316C300 312 330 296 350 264"/>
+        <path class="trail us draw d2" d="M120 168C150 140 190 128 226 112"/>
+        <path class="pass draw d3" d="M168 262C200 290 230 300 252 312"/>
+        <path class="screen" d="M284 326L304 340"/>
+        <g class="them"><circle cx="256" cy="300" r="13"/><text x="256" y="304.5">11</text><circle cx="306" cy="298" r="13"/><text x="306" y="302.5">15</text><circle cx="176" cy="226" r="13"/><text x="176" y="230.5">13</text><circle cx="396" cy="176" r="13"/><text x="396" y="180.5">12</text><circle cx="208" cy="148" r="13"/><text x="208" y="152.5">14</text></g>
+        <g class="us"><circle cx="262" cy="340" r="13"/><text x="262" y="344.5">4</text><circle cx="296" cy="330" r="13"/><text x="296" y="334.5">33</text><circle cx="150" cy="250" r="13"/><text x="150" y="254.5">7</text><circle cx="420" cy="190" r="13"/><text x="420" y="194.5">23</text><circle cx="104" cy="182" r="13"/><text x="104" y="186.5">12</text></g>
+        <circle class="ball" cx="274" cy="350" r="5.5"/>
       </svg>
       <figcaption>High pick and roll, weak-side flare. Every possession you tag becomes a clip you can replay from the numbers.</figcaption>
     </figure></div>`;
@@ -339,7 +347,7 @@ const RENDER = {
       return `<details ${n === 0 ? "open" : ""}><summary><span class="kind ${esc(i.kind)}">${kind}${i.at ? `<br>${day(i.at)}` : ""}</span><span class="t" dir="auto">${esc(i.title.replace(/^(debrief|trend)\s*:\s*/i, ""))}</span></summary>
         <div class="body" dir="auto">${esc(i.body).split("\n").filter(Boolean).map((l) => `<p>${l}</p>`).join("")}
           ${i.kind === "debrief" ? `<p class="by">${writtenBy(i.source)}</p>` : ""}
-          <div class="actions">${i.ref?.session_id ? `<button type="button" class="btn line small" data-watch="${i.ref.session_id}" data-title="${esc(i.title)}">${ICON.film}Watch the film</button>` : ""}
+          <div class="actions">${i.ref?.session_id ? `<button type="button" class="btn quiet small" data-watch="${i.ref.session_id}" data-title="${esc(i.title)}">Review the film</button>` : ""}
           ${askBtn("Ask what to do about it", "What should we do about this?", `${i.title}: ${i.body}`.slice(0, 1500))}</div></div></details>`;
     }).join("");
     const dimRows = Object.entries(s.team_dimensions).map(([k, d]) => {
@@ -347,17 +355,17 @@ const RENDER = {
       return `<div class="lab" title="${esc(d.name)}">${esc(SHORT[k])}</div><div class="track"><span class="gap" style="left:${lo * 100}%;width:${(hi - lo) * 100}%;background:${c};opacity:.35"></span><span class="exp" style="left:${d.baseline * 100}%"></span><span class="dot" style="left:${d.mean * 100}%;background:${c}"></span></div><div class="val ${d.gap >= 0 ? "up" : "down"}">${signed(d.gap)}${Math.round(d.gap * 100) ? "%" : ""}</div>`;
     }).join("");
     $("#main").innerHTML = `<div class="view">
-      <header class="page-head"><h1>${esc(s.team.name)}</h1>
-        <p class="lede">${top ? `The biggest gap this week is <b>${esc(top.name.toLowerCase())}</b>. ` : ""}${s.players.length} players and ${nf.format(s.data_coverage.events)} tagged events so far${s.trends.length ? `. ${s.trends.length === 1 ? "One clear trend" : `${s.trends.length} clear trends`} in the last three weeks` : ""}.</p></header>
+      <header class="page-head"><p class="kicker">${esc(s.team.name)}</p><h1>${top ? `This week, work on <em>${esc(PHRASE[top.dimension] || top.name.toLowerCase())}</em>.` : "Add a game to see where the team stands."}</h1>
+        <p class="lede">${s.players.length} players and ${nf.format(s.data_coverage.events)} tagged events so far${s.trends.length ? `. ${s.trends.length === 1 ? "One clear trend" : `${s.trends.length} clear trends`} in the last three weeks` : ""}.</p></header>
       <div class="split">
         <section aria-labelledby="hFeed"><h2 id="hFeed">Debriefs and alerts</h2>
           <div class="feed">${feed || `<p class="empty">Nothing new. A debrief lands here after every game or practice you add.</p>`}</div></section>
         <aside class="stack">
           <section aria-labelledby="hNeed"><h2 id="hNeed">Practice priorities</h2>
-            <ol class="needs">${s.priorities.map((p) => `<li><span>${esc(p.name)}</span><span class="bar"><i style="width:${(p.need / maxNeed) * 100}%"></i></span></li>`).join("")}</ol></section>
+            <ol class="needs">${s.priorities.map((p) => `<li><span>${esc(cap(PHRASE[p.dimension] || p.name))}</span><span class="bar"><i style="width:${(p.need / maxNeed) * 100}%"></i></span></li>`).join("")}</ol></section>
           <section aria-labelledby="hUse"><h2 id="hUse">Players to feature</h2>
             <ul class="plain">${feature(s.exploit).map((g) => `<li><button type="button" class="row" data-player="${g.id}">${esc(g.player)}<span class="sub">${g.items.map((x) => `${esc(x.name)} ${pct(x.mean)}, position expects ${pct(x.baseline)}`).join("; ")}</span></button></li>`).join("") || `<li class="soft">Not enough data yet.</li>`}</ul></section>
-          <details class="brief"><summary>Practice briefing</summary><div class="text" dir="auto">${esc(brief.text)}</div><p class="note" style="margin-top:8px">${writtenBy(brief.source)}</p></details>
+          <section><details class="brief"><summary>Practice briefing</summary><div class="text" dir="auto">${esc(brief.text)}</div><p class="note" style="margin-top:8px">${writtenBy(brief.source)}</p></details></section>
         </aside></div>
       <section aria-labelledby="hRoster"><h2 id="hRoster">Roster</h2>
         <div class="tbl"><table><thead><tr><th>#</th><th>Player</th><th class="hide-narrow">Pos.</th><th class="hide-narrow">Best right now</th><th>Work on</th><th class="r hide-narrow">Events</th></tr></thead><tbody>
@@ -375,7 +383,7 @@ const RENDER = {
       r.addEventListener("click", open);
       if (r.tagName === "TR") r.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } });
     });
-    $$("[data-watch]", main).forEach((b) => b.addEventListener("click", () => sessionFilm(b.dataset.watch, b.dataset.title)));
+    $$("[data-watch]", main).forEach((b) => b.addEventListener("click", () => { FILM = Number(b.dataset.watch); go("film"); }));
     bindPlayTypeRows($("#ptSec"), "Our team", {});
     bindAsk(main);
   },
@@ -398,7 +406,7 @@ const RENDER = {
       if (extra.about) d.insertAdjacentHTML("beforeend", `<span class="about">About: ${esc(extra.about.slice(0, 140))}${extra.about.length > 140 ? "…" : ""}</span>`);
       if (extra.actions?.length) {
         const a = document.createElement("div"); a.className = "acts";
-        a.innerHTML = extra.actions.map((x) => x.playlist_id ? `<button type="button" class="btn line small" data-pl="${x.playlist_id}">${ICON.film}Watch the playlist</button>`
+        a.innerHTML = extra.actions.map((x) => x.playlist_id ? `<button type="button" class="btn line small" data-pl="${x.playlist_id}">Watch the playlist</button>`
           : `<span class="did">${esc(x.kind.replace(/_/g, " "))}${x.stored ? `: ${x.stored} stored` : ""}${x.count ? `: ${x.count}` : ""}</span>`).join("");
         $$("[data-pl]", a).forEach((b) => b.addEventListener("click", () => openPlaylist(b.dataset.pl)));
         d.appendChild(a);
@@ -465,8 +473,8 @@ const RENDER = {
   async practice() {
     const opps = await api(`/api/teams/${TEAM}/opponents`);
     $("#main").innerHTML = `<div class="view">
-      <header class="page-head"><h1>Practice plan</h1><p class="lede">Built from what the team needs most, the next opponent, your court, and the drills you have voted up.</p></header>
-      <div class="split" style="grid-template-columns:minmax(0,320px) minmax(0,1fr)">
+      <header class="page-head"><h1>Plan tonight's practice.</h1><p class="lede">Built from what the team needs most, the next opponent, your court, and the drills you have voted up.</p></header>
+      <div class="split plan-split">
         <form class="panel form-col" id="planForm"><h2>Practice constraints</h2>
           <div class="two"><label class="field">Starts at<input name="start" type="time" value="18:00"></label><label class="field">Minutes<input name="minutes" type="number" value="90" min="15" max="240"></label></div>
           <div class="two"><label class="field">Players<input name="players" type="number" value="10" min="1" max="30"></label><label class="field">Hoops<input name="hoops" type="number" value="2" min="0" max="12"></label></div>
@@ -505,15 +513,15 @@ const RENDER = {
     const rows = await api(`/api/teams/${TEAM}/homework`);
     const open = rows.filter((h) => h.status !== "done").length;
     $("#main").innerHTML = `<div class="view">
-      <header class="page-head"><h1>Homework</h1>
+      <header class="page-head"><h1>${rows.length ? `${open ? `<em>${open} item${open === 1 ? "" : "s"}</em> still open this week.` : "All homework is done."}` : "Give every player two things to work on."}</h1>
         <p class="lede">Two items per player from their biggest needs, each with their own possessions to watch first. Logged results count as evidence, at lower weight than games.</p>
         <div class="actions"><button type="button" class="btn" id="assign">Assign this week's homework</button>${rows.length ? `<span class="note">${open} open, ${rows.length - open} done</span>` : ""}</div></header>
-      ${rows.length ? `<div class="tbl"><table><thead><tr><th>Player</th><th>Drill</th><th>Target</th><th>Due</th><th class="r">Result</th></tr></thead><tbody>
+      ${rows.length ? `<section aria-label="This week's homework"><div class="tbl"><table><thead><tr><th>Player</th><th>Drill</th><th>Target</th><th>Due</th><th class="r">Result</th></tr></thead><tbody>
       ${rows.map((h, i) => `<tr><td class="nm">${i === 0 || rows[i - 1].player !== h.player ? esc(h.player) : ""}</td>
         <td>${esc(h.drill?.name)}<span class="sub">${esc(SHORT[h.dimension] || "")}: ${esc(h.drill?.setup)}</span>${h.playlist_id ? `<button type="button" class="btn quiet small" data-pl="${h.playlist_id}">Watch first</button>` : ""}</td>
         <td>${esc(h.target)}</td><td style="white-space:nowrap">${day(h.due)}</td>
         <td class="r">${h.status === "done" ? `<span class="up">Done${h.attempts ? ` ${h.made}/${h.attempts}` : ""}</span>` : `<button type="button" class="btn line small" data-h="${h.id}">Log result</button>`}</td></tr>`).join("")}
-      </tbody></table></div>` : `<p class="empty"><b>Nothing assigned yet.</b> Assign the week and every player gets two items from their own numbers.</p>`}</div>`;
+      </tbody></table></div></section>` : `<p class="empty"><b>Nothing assigned yet.</b> Assign the week and every player gets two items from their own numbers.</p>`}</div>`;
     $("#assign").addEventListener("click", async () => {
       const r = await api(`/api/teams/${TEAM}/homework/assign`, { method: "POST" });
       toast(`${r.length} items assigned`); go("homework", { focus: false });
@@ -556,16 +564,16 @@ const RENDER = {
   },
 
   async film() {
-    const [sessions, opps, health, players] = await Promise.all([api(`/api/teams/${TEAM}/sessions`), api(`/api/teams/${TEAM}/opponents`), api("/api/health"), api(`/api/teams/${TEAM}/players`)]);
-    const KIND = { game: "Game", practice: "Practice", scrimmage: "Scrimmage" };
+    const [sessions, opps, health, players, inbox] = await Promise.all([api(`/api/teams/${TEAM}/sessions`), api(`/api/teams/${TEAM}/opponents`), api("/api/health"), api(`/api/teams/${TEAM}/players`), api(`/api/teams/${TEAM}/inbox`)]);
     const TAGS = [["shot", "rim", "Shot at the rim", "Made", "Missed"], ["shot", "mid", "Mid-range shot", "Made", "Missed"], ["shot", "three", "Three", "Made", "Missed"], ["shot", "ft", "Free throw", "Made", "Missed"],
       ["defense", "", "On-ball defense", "Stop", "Beaten"], ["rotation", "", "Help rotation", "On time", "Late"], ["rebound", "", "Rebound chance", "Won", "Lost"], ["sprint", "", "Getting back", "Sprinted", "Jogged"]];
+    if (!sessions.find((x) => x.id === FILM)) FILM = (sessions.find((x) => x.has_video) || sessions[0])?.id ?? null;
     $("#main").innerHTML = `<div class="view">
-      <header class="page-head"><h1>Film room</h1><p class="lede">Every game and practice you have added. A debrief is written after each one; tagged moments become clips everywhere in HoopLab.</p></header>
-      <section aria-labelledby="hSess"><h2 id="hSess">Sessions</h2>
-        ${sessions.length ? `<div class="tbl"><table><thead><tr><th>Date</th><th>Session</th><th class="r">Events</th><th class="r"></th></tr></thead><tbody>
-        ${sessions.map((s, n) => `<tr${n >= 8 ? " hidden" : ""}><td style="white-space:nowrap">${day(s.date)}</td><td>${esc(s.title || KIND[s.kind])}<span class="sub">${KIND[s.kind] || esc(s.kind)}${s.status && s.status !== "analyzed" ? ` · ${esc(s.status)}` : ""}</span></td><td class="r">${nf.format(s.events)}</td>
-          <td class="r"><span class="actions" style="justify-content:end">${s.has_video ? `<button type="button" class="btn line small" data-watch="${s.id}" data-title="${esc(s.title)}">${ICON.film}Watch</button>` : ""}${s.events ? `<button type="button" class="btn quiet small" data-debrief="${s.id}">Debrief</button>` : ""}</span></td></tr>`).join("")}</tbody></table></div>${sessions.length > 8 ? `<p style="margin-top:var(--s3)"><button type="button" class="btn quiet small" id="allSess">Show all ${sessions.length} sessions</button></p>` : ""}`
+      ${FILM ? `<div id="review"><p class="loading">Loading…</p></div>` : `<header class="page-head"><h1>Add your last game.</h1><p class="lede">Every game and practice you add gets a debrief, and each tagged moment becomes a clip you can replay from any number in HoopLab.</p></header>`}
+      <section aria-labelledby="hSess"><h2 id="hSess">All sessions</h2>
+        ${sessions.length ? `<div class="tbl"><table class="lib"><thead><tr><th>Date</th><th>Session</th><th class="r">Tagged</th><th class="r hide-narrow">Film</th></tr></thead><tbody>
+        ${sessions.map((s, n) => `<tr class="go"${n >= 8 ? " hidden" : ""} tabindex="0" data-open="${s.id}" ${s.id === FILM ? `aria-current="true"` : ""} aria-label="Review ${esc(s.title || KIND[s.kind])}"><td style="white-space:nowrap">${day(s.date)}</td><td>${esc(s.title || KIND[s.kind])}<span class="sub">${KIND[s.kind] || esc(s.kind)}${s.status && s.status !== "analyzed" ? `, ${esc(s.status)}` : ""}</span></td><td class="r">${nf.format(s.events)}</td>
+          <td class="r soft hide-narrow">${s.has_video ? "Film" : ""}</td></tr>`).join("")}</tbody></table></div>${sessions.length > 8 ? `<p style="margin-top:var(--s3)"><button type="button" class="btn quiet small" id="allSess">Show all ${sessions.length} sessions</button></p>` : ""}`
         : `<p class="empty"><b>No sessions yet.</b> Add your last game below, then upload its film or tag it from the bench.</p>`}</section>
       <div class="split even">
         <section aria-labelledby="hAdd"><h2 id="hAdd">New session</h2>
@@ -598,17 +606,17 @@ const RENDER = {
     const showTagVideo = () => { const sid = $("#sessPick")?.value, s = sessById[sid];
       $("#tagVideoWrap").innerHTML = s?.has_video ? `<video id="tagVideo" class="video" controls playsinline preload="metadata" src="/api/sessions/${sid}/video"></video>` : ""; };
     $("#sessPick").addEventListener("change", showTagVideo); showTagVideo();
-    $$("[data-watch]", main).forEach((b) => b.addEventListener("click", () => sessionFilm(b.dataset.watch, b.dataset.title)));
     $("#allSess")?.addEventListener("click", (e) => { $$("tr[hidden]", main).forEach((r) => (r.hidden = false)); e.currentTarget.remove(); });
-    $$("[data-debrief]", main).forEach((b) => b.addEventListener("click", async () => {
-      modal(`<p class="loading" aria-live="polite">Writing the debrief…</p>`);
-      const d = await api(`/api/sessions/${b.dataset.debrief}/debrief?lang=${LANG()}`, { method: "POST" });
-      const r = d.report;
-      modal(`<h2 id="modalTitle">${esc(r.session.title || KIND[r.session.kind])}${r.opponent && !(r.session.title || "").includes(r.opponent) ? ` vs ${esc(r.opponent)}` : ""}</h2><p class="note">${day(r.session.date)} · ${writtenBy(d.source)}</p>
-        <div class="msg-out" dir="auto">${esc(d.text)}</div>
-        ${r.standouts.length ? `<h3 style="margin:var(--s6) 0 var(--s2)">Away from what the model expected</h3><div class="tbl"><table><thead><tr><th>Player</th><th>Skill</th><th class="r">This session</th><th class="r">Expected</th></tr></thead><tbody>${r.standouts.map((x) => `<tr><td class="nm">${esc(x.player)}</td><td>${esc(x.name)}</td><td class="r ${x.z > 0 ? "up" : "down"}">${x.made}/${x.n}</td><td class="r soft">${pct(x.expected)}</td></tr>`).join("")}</tbody></table></div>` : ""}
-        <p class="note" style="margin-top:var(--s4)">Also posted to Today.</p>`);
-    }));
+    $$("[data-open]", main).forEach((row) => {
+      const open = () => {
+        FILM = Number(row.dataset.open);
+        $$("[data-open]", main).forEach((x) => (x === row ? x.setAttribute("aria-current", "true") : x.removeAttribute("aria-current")));
+        filmReview(sessById[row.dataset.open], inbox, players); window.scrollTo({ top: 0, behavior: "smooth" });
+      };
+      row.addEventListener("click", open);
+      row.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } });
+    });
+    if (FILM) filmReview(sessById[String(FILM)], inbox, players);
     $("#newSession").addEventListener("submit", async (e) => {
       e.preventDefault();
       const f = Object.fromEntries(new FormData(e.target)); f.opponent_id = f.opponent_id ? Number(f.opponent_id) : null;
@@ -659,6 +667,152 @@ const RENDER = {
   },
 };
 
+// ---------------------------------------------------------------- film review: one session, its film and its moments
+const PTS = { rim: 2, mid: 2, three: 3, ft: 1 };
+const SHOT_WORD = { rim: "layup", mid: "mid-range jumper", three: "three", ft: "free throw" };
+const NUM_WORD = ["No", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten"];
+const clock = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
+const longDay = (iso) => new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "long" }).format(new Date(iso));
+const PLAY_ICON = '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3 1.5v9l7.5-4.5z"/></svg>';
+const PAUSE_ICON = '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 1.5h2.5v9H2.5zM7 1.5h2.5v9H7z"/></svg>';
+
+// Events tagged at the same instant are one moment: a shot with its pass, a turnover with who got back.
+function moments(clips) {
+  const at = new Map();
+  for (const c of clips) { const k = c.t_start.toFixed(1); if (!at.has(k)) at.set(k, []); at.get(k).push(c); }
+  const passes = clips.filter((c) => c.type === "pass" && c.player);
+  const out = [];
+  for (const cs of at.values()) {
+    const ours = (t) => cs.find((c) => c.type === t && c.player);
+    const shot = ours("shot"), tov = ours("turnover"), reb = ours("rebound"), lead = shot || tov || reb;
+    if (!lead) continue;
+    const m = { t0: lead.t_start, t1: lead.t_end, player: lead.player, play: lead.play_type,
+      jogged: cs.filter((c) => c.type === "sprint" && c.player && !c.outcome).map((c) => first(c.player)) };
+    if (shot) {
+      const from = passes.find((p) => p.t_start <= shot.t_start && shot.t_start - p.t_start < 3 && p.player !== shot.player);
+      Object.assign(m, { kind: "shot", what: SHOT_WORD[shot.zone] || "shot", good: !!shot.outcome, result: shot.outcome ? "Made" : "Missed",
+        sub: [m.play && ptName(m.play), from && `from ${first(from.player)}`].filter(Boolean).join(", ") });
+    } else if (tov) {
+      const stolen = cs.some((c) => c.type === "steal" && !c.player);
+      Object.assign(m, { kind: "tov", what: stolen ? "turnover, stolen" : "turnover", good: false,
+        result: m.jogged.length ? `${m.jogged.length} jogged back` : "Lost it", sub: [m.play && ptName(m.play)].filter(Boolean).join("") });
+    } else {
+      Object.assign(m, { kind: "reb", what: "rebound", good: !!reb.outcome, result: reb.outcome ? "Won it" : "Lost it", sub: "After a miss" });
+    }
+    out.push(m);
+  }
+  return out.sort((a, b) => a.t0 - b.t0);
+}
+
+async function filmReview(s, inbox, players) {
+  const [r, clips] = await Promise.all([api(`/api/sessions/${s.id}/report`), s.has_video ? api(`/api/teams/${TEAM}/clips?session_id=${s.id}&limit=300`) : Promise.resolve([])]);
+  if (FILM !== s.id) return;
+  const num = Object.fromEntries(players.map((p) => [p.name, p.number]));
+  const ms = moments(clips);
+  const deb = inbox.find((i) => i.kind === "debrief" && i.ref?.session_id === s.id);
+  const sh = r.team.shooting;
+  const fg = Object.entries(sh).filter(([z]) => z !== "ft").reduce((a, [, v]) => [a[0] + v.made, a[1] + v.attempts], [0, 0]);
+  const pts = Object.entries(sh).reduce((a, [z, v]) => a + v.made * (PTS[z] || 0), 0);
+  const three = sh.three || { made: 0, attempts: 0 };
+  const tov = r.team.turnovers;
+  const jog = ms.filter((m) => m.jogged.length);
+  const title = s.title || KIND[s.kind];
+  const oppShort = r.opponent ? r.opponent.split(" ")[0] : "";
+  const kicker = `${esc(title)}${r.opponent && !title.includes(oppShort) ? `, vs ${esc(r.opponent)}` : ""}, ${longDay(s.date)}`;
+  const second = jog.length ? `<em>${NUM_WORD[jog[0].jogged.length] || jog[0].jogged.length} players</em> jogged back after ${jog.length === 1 ? "a turnover" : `${jog.length} turnovers`}.`
+    : tov ? `Gave the ball away <em>${tov} time${tov === 1 ? "" : "s"}</em>.` : `No turnovers.`;
+  const head = fg[1] ? `Scored ${pts} on ${fg[0]} of ${fg[1]} shooting. ${second}` : `${nf.format(r.events)} moments tagged. ${second}`;
+  const top = r.standouts[0];
+  const facts = [[pts, "Points"], [`${fg[0]}/${fg[1]}`, "Field goals"], [`${three.made}/${three.attempts}`, "Threes"], [tov, `Turnover${tov === 1 ? "" : "s"}`], [nf.format(r.events), "Tagged moments"]];
+  const debLines = deb ? deb.body.split("\n").filter(Boolean) : [];
+  const ctx = `Session: ${title}${r.opponent ? ` vs ${r.opponent}` : ""}, ${day(s.date)}. ${debLines.join(" ")}`.slice(0, 1500);
+  const factsHtml = `<div class="statrow">${facts.map(([v, l]) => `<div><b>${v}</b><span>${l}</span></div>`).join("")}</div>`;
+  const standouts = r.standouts.length ? `<div class="tbl"><table><thead><tr><th>Player</th><th>Skill</th><th class="r">This session</th><th class="r">Expected</th></tr></thead><tbody>${r.standouts.map((x) => `<tr><td class="nm">${esc(x.player)}</td><td>${esc(SHORT[x.dimension] || x.name)}</td><td class="r ${x.z > 0 ? "up" : "down"}">${x.made}/${x.n}</td><td class="r soft">${pct(x.expected)}</td></tr>`).join("")}</tbody></table></div>` : `<p class="empty">Nobody was far from what the model expected.</p>`;
+  $("#review").innerHTML = `
+    <header class="page-head review-head"><div><p class="kicker">${kicker}</p><h1>${head}</h1></div>
+      ${top ? `<p class="aside-fact">Furthest from expected<b>${esc(first(top.player))}, ${esc((SHORT[top.dimension] || top.name).toLowerCase())} ${top.made}/${top.n}</b></p>` : ""}</header>
+    <div class="split film-grid">
+      <section class="film-panel" aria-label="Film and numbers">
+        ${s.has_video ? `<div class="screen">
+          <video id="fv" playsinline muted preload="auto" src="/api/sessions/${s.id}/video"></video>
+          <p class="now" id="fvNow" aria-live="polite"></p>
+          <div class="bar"><button type="button" class="play" id="fvPlay" aria-label="Play">${PLAY_ICON}</button><span class="idx" id="fvIdx"></span>
+            <div class="tl" id="fvTl" role="slider" tabindex="0" aria-label="Position in the film" aria-valuemin="0" aria-valuenow="0"><i class="ph" id="fvPh"></i></div>
+            <span class="tm" id="fvTime">0:00</span></div></div>` : `<h2>Away from what the model expected</h2>${standouts}`}
+        ${factsHtml}
+      </section>
+      <aside class="stack">
+        <section class="coach" aria-labelledby="hCoach"><h2 id="hCoach">Assistant coach</h2>
+          ${deb ? `<p class="said" dir="auto">${debLines.slice(0, 3).map(esc).join(" ")}</p>` : `<p class="said">No debrief for this session yet. Claude writes one from the tagged moments and what the model expected from each player.</p>`}
+          <div class="acts">
+            ${deb ? `<button type="button" class="act" data-ask="Plan the next practice around what this session showed." data-ctx="${esc(ctx)}">Plan the next practice from this</button>` : `<button type="button" class="act" id="writeDeb">Write the debrief</button>`}
+            ${deb && debLines.length > 3 ? `<button type="button" class="act" id="readDeb">Read the full debrief</button>` : ""}
+            <button type="button" class="act" data-ask="What stands out in this session, and what should I show the players?" data-ctx="${esc(ctx)}">Ask about this ${s.kind === "practice" ? "practice" : "game"}</button>
+          </div>
+          ${deb ? `<p class="by">${writtenBy(deb.source)}</p>` : ""}</section>
+        ${s.has_video ? `<section class="cliplist" aria-labelledby="hClips"><div class="ch"><h2 id="hClips">Moments</h2>
+            <div class="seg" role="group" aria-label="Show"><button type="button" data-f="all" aria-pressed="true">All</button><button type="button" data-f="shot" aria-pressed="false">Shots</button><button type="button" data-f="tov" aria-pressed="false">Turnovers</button><button type="button" data-f="reb" aria-pressed="false">Boards</button></div></div>
+          <ol id="fvList">${ms.map((m, i) => `<li data-k="${m.kind}"><button type="button" class="mrow" data-m="${i}"><span class="n">${esc(num[m.player] ?? "")}</span>
+            <span class="x"><b>${esc(first(m.player))}, ${esc(m.what)}</b><span>${esc(m.sub)}${m.sub ? " " : ""}<span class="r ${m.good ? "g" : "b"}">${esc(m.result)}</span></span></span><span class="q">${clock(m.t0)}</span></button></li>`).join("")}</ol></section>`
+          : `<section aria-labelledby="hNoFilm"><h2 id="hNoFilm">No film for this session</h2><p class="note">Upload the video below and every moment you tag becomes a clip here.</p></section>`}
+      </aside></div>`;
+  const el = $("#review");
+  bindAsk(el);
+  $("#readDeb")?.addEventListener("click", () => modal(`<h2 id="modalTitle">${esc(title)}</h2><p class="note">${day(s.date)}. ${writtenBy(deb.source)}</p><div class="msg-out" dir="auto">${esc(deb.body)}</div>`, "narrow"));
+  $("#writeDeb")?.addEventListener("click", async (e) => {
+    e.currentTarget.disabled = true; e.currentTarget.textContent = "Writing the debrief…";
+    await api(`/api/sessions/${s.id}/debrief?lang=${LANG()}`, { method: "POST" });
+    filmReview(s, await api(`/api/teams/${TEAM}/inbox`), players);
+  });
+  if (!s.has_video) return;
+
+  const v = $("#fv"), tl = $("#fvTl"), rows = $$(".mrow", el);
+  let cur = -1;
+  const dur = () => (Number.isFinite(v.duration) && v.duration > 0 ? v.duration : Math.max(1, ...ms.map((m) => m.t1)));
+  const drawTicks = () => {
+    $$(".tk", tl).forEach((t) => t.remove());
+    const d = dur();
+    for (let t = 0; t < d; t += 2) tl.insertAdjacentHTML("afterbegin", `<i class="tk minor" style="left:${(t / d) * 100}%"></i>`);
+    ms.forEach((m) => tl.insertAdjacentHTML("afterbegin", `<i class="tk ${m.good ? "g" : "b"}" style="left:${(m.t0 / d) * 100}%"></i>`));
+    tl.setAttribute("aria-valuemax", String(Math.round(d)));
+  };
+  const show = (i) => {
+    if (i === cur) return; cur = i;
+    rows.forEach((b) => b.setAttribute("aria-current", String(Number(b.dataset.m) === i)));
+    const m = ms[i];
+    $("#fvNow").innerHTML = m ? `<b>${num[m.player] != null ? `#${esc(num[m.player])} ` : ""}${esc(first(m.player))}</b>, ${esc(m.what)}, ${clock(m.t0)}` : "";
+    $("#fvNow").hidden = !m;
+    $("#fvIdx").textContent = m ? `${i + 1} of ${ms.length}` : `${ms.length} moments`;
+  };
+  const tick = () => {
+    const t = v.currentTime, d = dur();
+    $("#fvPh").style.left = `${Math.min(100, (t / d) * 100)}%`;
+    $("#fvTime").textContent = clock(t);
+    tl.setAttribute("aria-valuenow", String(Math.round(t))); tl.setAttribute("aria-valuetext", clock(t));
+    let i = -1; ms.forEach((m, k) => { if (m.t0 <= t + 0.05) i = k; });
+    show(i);
+  };
+  const setPlaying = () => { const p = !v.paused; $("#fvPlay").innerHTML = p ? PAUSE_ICON : PLAY_ICON; $("#fvPlay").setAttribute("aria-label", p ? "Pause" : "Play"); };
+  const seek = (t) => { v.currentTime = Math.max(0, Math.min(dur(), t)); tick(); };
+  v.addEventListener("loadedmetadata", () => { drawTicks(); tick(); });
+  v.addEventListener("timeupdate", tick);
+  v.addEventListener("play", setPlaying); v.addEventListener("pause", setPlaying);
+  $("#fvPlay").addEventListener("click", () => (v.paused ? v.play().catch(() => {}) : v.pause()));
+  tl.addEventListener("click", (e) => { const b = tl.getBoundingClientRect(); seek(((e.clientX - b.left) / b.width) * dur()); });
+  tl.addEventListener("keydown", (e) => {
+    const step = { ArrowLeft: -2, ArrowRight: 2, PageDown: -10, PageUp: 10 }[e.key];
+    if (step) { e.preventDefault(); seek(v.currentTime + step); }
+    else if (e.key === "Home") { e.preventDefault(); seek(0); } else if (e.key === "End") { e.preventDefault(); seek(dur()); }
+  });
+  rows.forEach((b) => b.addEventListener("click", () => { seek(ms[Number(b.dataset.m)].t0); v.play().catch(() => {}); }));
+  $$(".cliplist [data-f]", el).forEach((b) => b.addEventListener("click", () => {
+    $$(".cliplist [data-f]", el).forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+    $$("#fvList li", el).forEach((li) => (li.hidden = b.dataset.f !== "all" && li.dataset.k !== b.dataset.f));
+  }));
+  drawTicks(); show(ms.length ? 0 : -1); if (ms.length) { $("#fvIdx").textContent = `${ms.length} moments`; }
+  if (v.readyState >= 1) { drawTicks(); tick(); }
+}
+
 // ---------------------------------------------------------------- the player sheet
 async function playerSheet(card) {
   const pid = card.player.id, p = card.player;
@@ -674,7 +828,7 @@ async function playerSheet(card) {
   $("#sheet").innerHTML = `<div class="stack">
     <header class="sheet-head"><div class="big-n" aria-hidden="true">${esc(p.number ?? "")}</div>
       <div><h1>${esc(p.name)}</h1><p class="facts">${esc(p.position)}${p.height_cm ? `, ${p.height_cm} cm` : ""}. ${nf.format(card.events)} tagged events.${card.focus.length ? ` This week: ${card.focus.map((d) => esc(short(d).toLowerCase())).join(" and ")}.` : ""}</p></div>
-      <div class="actions"><button type="button" class="btn line" id="pmFilm">${ICON.film}All film</button><button type="button" class="btn line" id="pmMsg">Write ${esc(first(p.name))} a message</button>
+      <div class="actions"><button type="button" class="btn line" id="pmFilm">All film</button><button type="button" class="btn line" id="pmMsg">Write ${esc(first(p.name))} a message</button>
         ${askBtn(`Ask about ${first(p.name)}`, `How is ${p.name} doing, and what should we focus on with ${first(p.name)}?`, ctx)}<button type="button" class="btn quiet" id="pmEdit">Edit</button></div></header>
     <div id="pmOut"></div>
     <div class="sheet-grid">
@@ -687,7 +841,7 @@ async function playerSheet(card) {
   </div>`;
   const draw = () => {
     const colors = dims.map((_, k) => SERIES[k % SERIES.length]);
-    $("#pmChart").innerHTML = progressChart(h, dims, colors);
+    $("#pmChart").innerHTML = progressChart(h, dims, colors, $("#pmChart").clientWidth);
     $("#pmLegend").innerHTML = Object.keys(h.series).map((d) => { const k = dims.indexOf(d);
       return `<label class="${k >= 0 ? "on" : ""}"><input type="checkbox" data-dim="${d}" ${k >= 0 ? "checked" : ""}>${k >= 0 ? `<i style="background:${colors[k]}"></i>` : ""}${esc(SHORT[d])} <span class="${h.change[d] > 0.005 ? "up" : h.change[d] < -0.005 ? "down" : "soft"}">${signed(h.change[d])}</span></label>`; }).join("");
     $$("[data-dim]", $("#pmLegend")).forEach((c) => c.addEventListener("change", () => {

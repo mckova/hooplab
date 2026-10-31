@@ -3,28 +3,34 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="color-scheme" content="light">
-<meta name="theme-color" content="#e9eae4">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#0e1013">
 <meta name="description" content="HoopLab learns every player on your basketball team from game film and practice, then plans practices, homework and game plans with you.">
 <title>HoopLab</title>
+<script>document.documentElement.dataset.theme = localStorage.getItem("hooplab-theme") || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=Rubik:wght@400..700&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Albert+Sans:wght@400;500;600&family=Rubik:wght@400..700&display=swap">
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body class="bare">
 <a class="skip" href="#main">Skip to content</a>
-<aside class="rail" aria-label="HoopLab">
-  <div class="wordmark"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9.5" fill="#b8430f" stroke="#b8430f"/><path d="M2.5 12h19M12 2.5v19M5.2 5.4c3.3 3.3 3.3 9.9 0 13.2M18.8 5.4c-3.3 3.3-3.3 9.9 0 13.2" stroke="#fff8f2" stroke-width="1.3"/></svg>HoopLab</div>
-  <div class="team-switch"><label for="teamSelect">Team</label><select id="teamSelect"></select></div>
-  <div class="team-meta" id="teamMeta"></div>
+<header class="top glass">
+  <div class="wordmark">HoopLab</div>
   <nav class="nav" id="nav" aria-label="Sections"></nav>
-  <div class="rail-foot">
-    <div class="lang"><span id="langLabel">Debriefs and messages in</span>
-      <div class="seg" role="group" aria-labelledby="langLabel"><button type="button" data-lang="en" aria-pressed="true">English</button><button type="button" data-lang="he" aria-pressed="false" lang="he">עברית</button></div></div>
-    <div class="links"><button type="button" id="newTeamBtn">New team</button><button type="button" id="demoBtn">Reload demo</button></div>
-  </div>
-</aside>
+  <span class="sp"></span>
+  <form class="askbar" id="askBar" role="search"><label class="sr-only" for="askInput">Ask the assistant</label><input id="askInput" autocomplete="off" placeholder="Ask about the team" dir="auto"></form>
+  <div class="team-switch"><label class="sr-only" for="teamSelect">Team</label><select id="teamSelect"></select></div>
+  <details class="more"><summary aria-label="Settings">More</summary>
+    <div class="menu">
+      <div class="team-meta" id="teamMeta"></div>
+      <div class="lang"><span id="langLabel">Debriefs and messages in</span>
+        <div class="seg" role="group" aria-labelledby="langLabel"><button type="button" data-lang="en" aria-pressed="true">English</button><button type="button" data-lang="he" aria-pressed="false" lang="he">עברית</button></div></div>
+      <div class="lang"><span id="themeLabel">Appearance</span>
+        <div class="seg" role="group" aria-labelledby="themeLabel"><button type="button" data-theme-set="light" aria-pressed="false">Light</button><button type="button" data-theme-set="dark" aria-pressed="false">Dark</button></div></div>
+      <div class="links"><button type="button" id="newTeamBtn">New team</button><button type="button" id="demoBtn">Reload demo</button></div>
+    </div></details>
+</header>
 <main id="main" tabindex="-1"></main>
 <div id="modal" class="modal hidden"><div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="modalTitle"><button class="icon-btn close" id="modalClose" aria-label="Close"><svg class="i" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button><div id="modalBody"></div></div></div>
 <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>

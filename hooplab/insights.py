@@ -344,7 +344,7 @@ def _dims_filter(dimension: str | None):
 
 def clips(db: DB, team_id: int, player_id: int | None = None, dimension: str | None = None,
           outcome: bool | None = None, play_type: str | None = None, opponent_id: int | None = None,
-          limit: int = 30) -> list[dict]:
+          limit: int = 30, session_id: int | None = None) -> list[dict]:
     """Events that have video: every number in HoopLab can open its clips."""
     sql = ("SELECT e.*, s.title AS session_title, s.date AS session_date, p.name AS player FROM events e "
            "JOIN sessions s ON s.id = e.session_id LEFT JOIN players p ON p.id = e.player_id "
@@ -356,6 +356,9 @@ def clips(db: DB, team_id: int, player_id: int | None = None, dimension: str | N
     if opponent_id:
         sql += " AND e.opponent_id = ?"
         args.append(opponent_id)
+    if session_id:
+        sql += " AND e.session_id = ?"
+        args.append(session_id)
     if play_type:
         sql += " AND e.play_type = ?"
         args.append(play_type)

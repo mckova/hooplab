@@ -10,15 +10,16 @@ personal homework for every player, and a game plan against the next opponent.
 It keeps learning: from new games, from homework results and from which drills
 the coach likes.
 
-![Today: debriefs, practice priorities, the roster and the team's play types](docs/img/team-snapshot.png)
+![Film review: the game's headline, the film with its moments on the timeline, the assistant coach's read and the numbers](docs/img/film-review.png)
 
 | | |
 |---|---|
+| ![Home: what to work on this week, debriefs, priorities and the roster](docs/img/team-snapshot.png) | ![Film review in light mode](docs/img/film-review-light.png) |
 | ![Player sheet: clickable shot chart, skills with their likely range, progress](docs/img/player-card.png) | ![Every number opens its film](docs/img/clips.png) |
 | ![Practice plan on a clock, for a half court](docs/img/practice.png) | ![Opponent: keys to the game and head to head](docs/img/opponents.png) |
 | ![Homework for every player](docs/img/homework.png) | ![First run](docs/img/first-run.png) |
-| ![Film room: sessions, data import and live tagging](docs/img/games-film.png) | ![One-page scouting report](docs/img/scouting-report.png) |
-| ![The assistant](docs/img/assistant.png) | ![On a phone](docs/img/mobile-today.png) |
+| ![Film: every session, data import and live tagging](docs/img/film-library.png) | ![One-page scouting report](docs/img/scouting-report.png) |
+| ![The assistant](docs/img/assistant.png) | ![On a phone](docs/img/mobile-film.png) |
 
 ## AI-native by design
 

@@ -80,16 +80,23 @@ re-measure**. These are the decisions that shape it.
 
 ## Interface
 
-The interface reads like the coach's whiteboard: a light ground that works in a
-bright gym and on paper, ink lines, and one orange accent for our team and the
-primary action. The full system (colors, type, spacing, rules) is in
+The interface is frosted glass over soft ambient light, in light and dark
+modes (the first visit follows the system setting; the choice is kept per
+device). One typeface, Albert Sans, at two weights. Colour has fixed jobs:
+orange is the ball and nothing else on the court, our players are solid discs,
+opponents are court-blue rings, mint marks stops and makes, clay marks misses
+and baskets given up. The full system (colours, type, spacing, rules) is in
 [DESIGN.md](../DESIGN.md).
 
-* The signature element is the half-court shot chart: each zone shows the
-  player's rate against what the position expects, and selecting a zone plays
-  those shots.
+* Every page opens with a sentence, not a label: "Scored 7 on 3 of 5
+  shooting. Five players jogged back after a turnover."
+* Film review is the main screen: the film with its tagged moments as
+  coloured ticks on the timeline, the assistant coach's read with what to do
+  next, a filterable list of moments, and the numbers under the film.
+* The half-court shot chart: each zone shows the player's rate against what
+  the position expects, and selecting a zone plays those shots.
 * Practice plans are laid out on the clock (18:00, 18:08...), the way a coach
-  writes them on the board.
+  writes them.
 * Motion only on `transform` and `opacity`, under 250 ms, with a strong
   ease-out; dialogs and toasts enter with `@starting-style`; reduced motion
   removes movement.
