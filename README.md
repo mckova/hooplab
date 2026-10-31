@@ -10,18 +10,26 @@ personal homework for every player, and a game plan against the next opponent.
 It keeps learning: from new games, from homework results and from which drills
 the coach likes.
 
-![Team snapshot](docs/img/team-snapshot.png)
+![Team view: the coach's inbox, briefing and self-scout](docs/img/team-snapshot.png)
 
-![Clip player](docs/img/clips.png)
+| | |
+|---|---|
+| ![Player card: progress, message to the player](docs/img/player-card.png) | ![Every number opens its film](docs/img/clips.png) |
+| ![Practice plan for a half court](docs/img/practice.png) | ![One-page scouting report](docs/img/scouting-report.png) |
 
 ## AI-native by design
 
 HoopLab runs on **Claude Opus 5.5** (`claude-opus-5-5`, configurable with
-`HOOPLAB_MODEL`). The AI does real work in the product:
+`HOOPLAB_MODEL`). Claude sits in the coaching loop itself, not in a side panel:
+every game or practice that comes in is debriefed, every player gets a message
+written for them, and the assistant can be asked about whatever the coach is
+looking at, from any screen.
 
 | | What Claude does | How |
 |---|---|---|
-| **Assistant coach agent** | Chat in Hebrew or English: "we play Maccabi Thursday, plan 75 min for 9 players on one hoop". The agent reads the team model, builds the plan, assigns homework, logs what the coach reports and quotes the evidence | Tool-use agent loop over 13 strict-schema tools wrapping the engine (`hooplab/agent.py`); conversations persisted append-only |
+| **Assistant coach agent** | Chat in Hebrew or English, typed or dictated: "we play Maccabi Thursday, plan 75 min for 9 players on one hoop". The agent reads the team model, builds the plan, assigns homework, logs what the coach reports and quotes the evidence. "Ask the assistant" on a player, a plan, an opponent or an inbox item opens the chat with that context | Tool-use agent loop over 16 strict-schema tools wrapping the engine (`hooplab/agent.py`); screen context passed with the question; prompt caching on tools, instructions and the conversation; conversations persisted append-only |
+| **Debrief after every session** | As soon as a game or practice is imported (film, CSV, notes), Claude writes the debrief: who beat or missed the model's expectation and by how much, what the play types say, one thing for the next practice. It lands in the coach's inbox | Deterministic session report (each player vs. their own pre-session estimate), Claude writes from it, template fallback (`hooplab/coach_ai.py`) |
+| **A message for every player** | Strength to keep using, what we work on and why, this week's homework with its target, the film to watch first, real progress. Ready to send on WhatsApp, in Hebrew or English | Facts from the model and homework, Claude writes; encouragement only from statistically significant trends |
 | **Coach notes → data** | "Noam 3/5 from three, lost it twice vs pressure, their #12 owns the glass" becomes 7 events + a scouting note | Structured outputs with a Pydantic schema, roster matching, stored at 0.7 weight (`hooplab/perception.py`) |
 | **Film AI** | Reads game stills or sampled video frames, tags events by jersey number, writes scouting observations | Claude vision, stored at 0.5 weight |
 | **Designs drills** | When the library has no fit (one hoop, 5 players, a specific opponent action) it designs a drill that then feeds plans and homework | `design_custom_drill` tool → team drill library |
@@ -38,14 +46,18 @@ so the agent cannot invent a number: it can only quote tool results.
 
 | For the coach | How |
 |---|---|
+| **Coach's inbox**: debriefs, significant trends, overdue homework, players the model knows too little about | Debriefs posted automatically after each import; alerts computed live from the model |
+| **Progress over time** for every player and skill | Week-by-week skill estimates rebuilt from the events available at each date |
 | **Team snapshot**: strengths to exploit, team priorities, who is improving | Bayesian skill model over 10 dimensions per player, compared with what is expected for their position |
 | **Player cards** with honest uncertainty | 80% intervals; a strength/weakness is only claimed when the interval clears the positional baseline |
-| **Practice plans** for the time, players, hoops and intensity available | Greedy time-budgeted planner over a 30-drill library, weighted by team need, opponent and coach taste |
+| **Practice plans** for the time, players, hoops, court (full or half) and intensity available | Greedy time-budgeted planner over a 30-drill library, weighted by team need, opponent and coach taste |
 | **Homework** per player, with a measurable target and film to watch first | Solo drills for each player's top two needs, each with an auto-built playlist of the player's own misses; logged results flow back as evidence at reduced weight |
 | **Every number opens its film** | Click a skill, a play type or an opponent tendency and watch exactly those possessions | Each event keeps its clip window in the session video; clip player plays them back to back |
 | **Play types & points per possession** | Self-scout (team and player) and how each opponent scores: pick & roll, spot-up, post-up, cut, transition… | PPP, frequency and turnover rate per play type, small samples flagged |
 | **Opponent comparison & game plan** | Scouting from opponent events in your game video plus manual ratings, compared with your team; rule-based tactical insights with the evidence shown |
 | **Learns the coach** | 👍/👎 on drills updates a preference model that generalises through drill tags |
+| **Roster in seconds** | Add players one by one, edit them, or import a CSV roster |
+| **Tag while watching** | Play a session's film in the tagger; every tag keeps its clip window and play type |
 | **Video → events** | Possession, passes, assists, turnovers, steals, shot attempts/makes with court zone, rebounds, sprint-back effort, distance and top speed |
 | **Briefing** in English or Hebrew | Template by default; Claude rewrites it when `ANTHROPIC_API_KEY` is set (numbers always come from the engine) |
 
@@ -72,6 +84,7 @@ so the agent cannot invent a number: it can only quote tool results.
 * `hooplab/drills.py`: drill library, planner, preference learning.
 * `hooplab/agent.py`: the assistant-coach agent (Claude + engine tools).
 * `hooplab/perception.py`: notes and film → events (structured outputs, vision).
+* `hooplab/coach_ai.py`: session debriefs, the coach's inbox, progress over time and player messages.
 * `hooplab/llm.py`: weekly briefing and opponent scouting report, with deterministic fallbacks.
 * `hooplab/ingest.py`: the one write path for events (API, perception, demo film).
 * `hooplab/vision/render.py`: renders a track file to MP4 (the demo film).
@@ -91,10 +104,11 @@ Video processing: `pip install -e ".[vision]"`. Without a key, everything except
 the AI features keeps working and the API answers AI calls with a clear 503.
 Docker: `docker build -t hooplab . && docker run -p 8000:8000 hooplab`.
 
-Tests: `pytest` (32 tests: geometry, video event detection, skill model,
+Tests: `pytest` (40 tests: geometry, video event detection, skill model,
 insights on the seeded demo team, play types and clips, the rendered demo film,
-API end-to-end, and the agent/perception contracts against a scripted Claude
-client).
+debriefs, progress, player messages, roster import, practice conditions,
+concurrent API access, and the agent/perception contracts against a scripted
+Claude client).
 
 ## Getting data in
 
@@ -125,7 +139,10 @@ Interactive docs at `/docs`. Main routes: `POST /api/demo`, `GET
 /api/teams/{id}/plan`, `POST /api/teams/{id}/feedback`, `POST
 /api/teams/{id}/homework/assign`, `GET /api/opponents/{id}/matchup`, `GET
 /api/teams/{id}/play-types`, `GET /api/teams/{id}/clips`, `POST
-/api/teams/{id}/playlists`, `GET /api/opponents/{id}/scouting-report`, `POST
+/api/teams/{id}/playlists`, `GET /api/opponents/{id}/scouting-report`, `GET
+/api/teams/{id}/inbox`, `POST /api/sessions/{id}/debrief`, `GET
+/api/players/{id}/history`, `GET /api/players/{id}/message`, `POST
+/api/teams/{id}/players.csv`, `POST
 /api/sessions/{id}/tracks|video|events|events.csv`.
 
 MIT licence.

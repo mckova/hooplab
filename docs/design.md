@@ -57,13 +57,38 @@ re-measure**. These are the decisions that shape it.
 ## AI-native
 
 13. **The agent operates the model, it does not replace it.** The assistant
-    coach is a tool-use loop over 13 strict-schema tools (snapshot, player,
+    coach is a tool-use loop over 16 strict-schema tools (snapshot, player,
     matchup, plan, homework, log events, play types, playlists, custom drills,
     coach memory, …). Every statistic it quotes is a tool result.
 14. **Structured outputs for perception.** Coach notes and film frames become
     validated `Extraction` objects (Pydantic), matched to the roster, and stored
     at reduced weight (0.7 for notes, 0.5 for film AI) so they inform but do not
     dominate tracked data.
+
+15. **Claude in the loop, not beside it.** Every import of a game or practice
+    triggers a debrief: the engine compares each player with their own
+    estimate *before* that session (a z-score per skill, flagged at |z| ≥ 1.5
+    with at least 4 attempts), Claude writes it up, and it lands in the coach's
+    inbox. Player messages follow the same split: facts from the model,
+    words from Claude, and "progress" only when a trend is significant.
+16. **Ask from anywhere.** Buttons on players, plans, opponents and inbox items
+    open the assistant with a short description of what the coach is looking
+    at, so "is he getting better?" resolves to the right player.
+17. **Prompt caching by design.** Tools and the stable instructions form a
+    cached prefix; team context and coach memory come after the breakpoint, and
+    the growing conversation is cached turn to turn.
+
+## Interface
+
+* One dark ground, one accent (ball orange), tinted neutrals, a 4px spacing
+  scale, one radius scale and three elevations.
+* Motion only on `transform` and `opacity`, under 250 ms, with a strong
+  ease-out; dialogs and toasts enter with `@starting-style`; reduced motion
+  removes movement and keeps fades.
+* Accessible by default: real buttons for every action, labelled icon
+  buttons, a dialog that traps focus and returns it, keyboard-operable table
+  rows and cards, visible focus, `aria-live` status messages.
+* Destructive actions confirm in place; no browser `prompt()` or `confirm()`.
 
 ## Validation
 

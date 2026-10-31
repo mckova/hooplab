@@ -152,6 +152,9 @@ def seed(db: DB, seed_value: int = 1, weeks: int = 10, video_dir: str | None = N
         db.insert("drill_feedback", {"team_id": team_id, "drill_id": drill_id, "rating": rating, "ran": ran,
                                      "created_at": now_iso()})
     db.set_setting(team_id, "truth", {str(k): v for k, v in truth.items()})
+    from .coach_ai import debrief
+    last_game = db.one("SELECT id FROM sessions WHERE team_id = ? AND kind = 'game' ORDER BY date DESC", (team_id,))
+    debrief(db, last_game["id"], use_ai=False)   # the inbox starts with last game's debrief
     if video_dir:
         _seed_film(db, team_id, opp1, pids, numbers, video_dir, start + timedelta(weeks=weeks, days=-1))
     return team_id
@@ -181,3 +184,5 @@ def _seed_film(db: DB, team_id: int, opp: int, pids: list[int], numbers: dict, v
                                  "title": "Film: Maccabi North (first quarter)", "status": "analyzed",
                                  "video_path": path})
     ingest_tracks(db, db.one("SELECT * FROM sessions WHERE id = ?", (sid,)), tracks, our_team=1)
+    from .coach_ai import debrief
+    debrief(db, sid, use_ai=False)

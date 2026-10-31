@@ -2,43 +2,67 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0e1013">
+<meta name="description" content="HoopLab learns every player on your basketball team from game film and practice, then plans practices, homework and game plans with you.">
 <title>HoopLab · AI assistant coach</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&display=swap">
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-<header>
-  <div class="brand"><span class="ball"></span>HoopLab <small>AI assistant coach</small></div>
+<a class="skip" href="#main">Skip to content</a>
+<header class="topbar">
+  <div class="brand"><span class="ball" aria-hidden="true"></span>HoopLab <small>AI assistant coach</small></div>
   <div class="team-pick">
+    <label class="sr-only" for="teamSelect">Team</label>
     <select id="teamSelect"></select>
+    <label class="sr-only" for="langSelect">Language for AI writing</label>
+    <select id="langSelect" title="Language for AI-written debriefs, reports and player messages"><option value="en">AI writes in English</option><option value="he">AI כותב בעברית</option></select>
     <button id="demoBtn" class="ghost">Load demo team</button>
-    <button id="newTeamBtn" class="ghost">+ Team</button>
+    <button id="newTeamBtn" class="ghost">New team</button>
   </div>
 </header>
-<nav id="tabs">
-  <button data-tab="assistant" class="active">Assistant coach ✦</button>
-  <button data-tab="team">Team snapshot</button>
-  <button data-tab="players">Players</button>
-  <button data-tab="practice">Practice plan</button>
-  <button data-tab="homework">Homework</button>
-  <button data-tab="opponents">Opponents</button>
-  <button data-tab="data">Games &amp; video</button>
+<nav id="tabs" role="tablist" aria-label="Sections">
+  <button role="tab" aria-selected="true" data-tab="assistant" class="active">Assistant coach</button>
+  <button role="tab" aria-selected="false" data-tab="team">Team</button>
+  <button role="tab" aria-selected="false" data-tab="players">Players</button>
+  <button role="tab" aria-selected="false" data-tab="practice">Practice</button>
+  <button role="tab" aria-selected="false" data-tab="homework">Homework</button>
+  <button role="tab" aria-selected="false" data-tab="opponents">Opponents</button>
+  <button role="tab" aria-selected="false" data-tab="data">Games &amp; film</button>
 </nav>
-<main>
-  <section id="tab-assistant" class="tab active"></section>
-  <section id="tab-team" class="tab"></section>
-  <section id="tab-players" class="tab"></section>
-  <section id="tab-practice" class="tab"></section>
-  <section id="tab-homework" class="tab"></section>
-  <section id="tab-opponents" class="tab"></section>
-  <section id="tab-data" class="tab"></section>
-  <div id="empty" class="empty hidden">
-    <h2>No team yet</h2>
-    <p>Load the demo team to explore, or create your own team and add players.</p>
-  </div>
+<main id="main">
+  <section id="tab-assistant" class="tab active" role="tabpanel" aria-label="Assistant coach"></section>
+  <section id="tab-team" class="tab" role="tabpanel" aria-label="Team"></section>
+  <section id="tab-players" class="tab" role="tabpanel" aria-label="Players"></section>
+  <section id="tab-practice" class="tab" role="tabpanel" aria-label="Practice"></section>
+  <section id="tab-homework" class="tab" role="tabpanel" aria-label="Homework"></section>
+  <section id="tab-opponents" class="tab" role="tabpanel" aria-label="Opponents"></section>
+  <section id="tab-data" class="tab" role="tabpanel" aria-label="Games and film"></section>
+
+  <section id="empty" class="hero hidden" aria-labelledby="heroTitle">
+    <div class="hero-copy">
+      <h1 id="heroTitle">An assistant coach that knows every player on your team.</h1>
+      <p class="lede">It learns from your film and practices, then plans the week with you.</p>
+      <div class="hero-cta"><button id="heroDemo">Open the demo team</button><button id="heroNew" class="ghost">Start my team</button></div>
+    </div>
+    <div class="hero-stage" aria-hidden="true">
+      <svg class="plane court" viewBox="0 0 280 150"><rect x="1" y="1" width="278" height="148" rx="3"/><path d="M140 1v148M280 50h-58v50h58M280 12a64 64 0 0 0 0 126"/><circle cx="140" cy="75" r="18"/><circle cx="222" cy="75" r="18"/></svg>
+      <img class="plane film" src="/static/img/film-still.jpg" alt="" width="660" height="400">
+      <div class="plane note"><span class="dot"></span><div><b>Debrief: Game week 10</b><span>Noam: ball security 12/12, the model expected 83%.</span></div></div>
+    </div>
+    <ol class="steps">
+      <li><b>Bring in the season</b><span>Roster, game film, bench tags or plain notes in Hebrew or English.</span></li>
+      <li><b>See each player clearly</b><span>Strengths, what to work on, and how sure the model is, with the clips behind every number.</span></li>
+      <li><b>Plan with the assistant</b><span>Practices for your court and time, homework per player, and a plan for the next opponent.</span></li>
+    </ol>
+  </section>
 </main>
-<div id="modal" class="modal hidden"><div class="modal-box"><button class="ghost close" id="modalClose">✕</button><div id="modalBody"></div></div></div>
-<div id="toast" class="toast hidden"></div>
+<div id="modal" class="modal hidden"><div class="modal-box" role="dialog" aria-modal="true" aria-label="Details"><button class="ghost icon close" id="modalClose" aria-label="Close"><svg class="i" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button><div id="modalBody"></div></div></div>
+<div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
 <script src="/static/app.js"></script>
 </body>
 </html>

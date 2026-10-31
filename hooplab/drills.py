@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 
 
 @dataclass(frozen=True)
@@ -20,6 +20,7 @@ class Drill:
     setup: str = ""
     cue: str = ""
     metric: str = ""
+    full_court: bool = False   # needs the whole floor (breaks, end-to-end slides, 5-on-5)
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -139,6 +140,9 @@ LIBRARY: list[Drill] = [
       10, 10, tags=("game-like", "competitive"), setup="Up/down 3 with 40 s left: fouling, timeouts, sideline out-of-bounds plays.",
       cue="Know the score, know the clock.", metric="Execute the correct decision in each scenario."),
 ]
+FULL_COURT = {"dynamic-warmup", "advantage-3v2-2v1", "zig-zag-defense", "sprint-back-recovery", "11-man-break",
+              "no-dribble-scrimmage", "controlled-scrimmage", "suicide-ladders"}
+LIBRARY = [replace(d, full_court=True) if d.id in FULL_COURT else d for d in LIBRARY]
 BY_ID = {d.id: d for d in LIBRARY}
 INTENSITY = {"low": 0, "medium": 1, "high": 2}
 
@@ -187,11 +191,13 @@ class PlanRequest:
     focus: list = field(default_factory=list)   # dimensions the coach wants emphasised
     exclude: list = field(default_factory=list)
     include_warmup: bool = True
+    full_court: bool = True          # False = half court / a single gym corner
 
 
 def _eligible(d: Drill, req: PlanRequest) -> bool:
     return (d.min_players <= req.players and d.hoops <= max(req.hoops, 1)
             and INTENSITY[d.intensity] <= INTENSITY[req.max_intensity]
+            and (req.full_court or not d.full_court)
             and d.id not in req.exclude)
 
 
@@ -261,4 +267,4 @@ def drill_from_dict(d: dict) -> Drill:
                  min_players=int(d["min_players"]), max_players=int(d.get("max_players") or 99),
                  hoops=int(d.get("hoops", 1)), intensity=d.get("intensity", "medium"), solo=bool(d.get("solo")),
                  tags=tuple(d.get("tags") or ()) + ("custom",), setup=d.get("setup", ""), cue=d.get("cue", ""),
-                 metric=d.get("metric", ""))
+                 metric=d.get("metric", ""), full_court=bool(d.get("full_court")))

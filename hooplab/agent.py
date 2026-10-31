@@ -46,6 +46,7 @@ TOOLS = [
      "input_schema": _obj({
          "minutes": {"type": "integer"}, "players": {"type": "integer"}, "hoops": {"type": "integer"},
          "max_intensity": {"type": "string", "enum": ["low", "medium", "high"]},
+         "full_court": {"type": "boolean", "description": "false when only half a court is available"},
          "focus": {"type": "array", "items": {"type": "string", "enum": DIMS}},
          "opponent": {"type": ["string", "null"]}})},
     {"name": "assign_homework", "description":
@@ -90,6 +91,18 @@ TOOLS = [
          "intensity": {"type": "string", "enum": ["low", "medium", "high"]}, "solo": {"type": "boolean"},
          "setup": {"type": "string"}, "cue": {"type": "string"}, "metric": {"type": "string"},
          "tags": {"type": "array", "items": {"type": "string"}}})},
+    {"name": "get_progress", "description":
+        "How one player's skill estimates moved week by week (last 10 weeks), with the change over the last 4 "
+        "weeks. Use for 'is X getting better?' Pair with get_player trends: only significant trends are proof.",
+     "input_schema": _obj({"name": {"type": "string"}})},
+    {"name": "get_session_report", "description":
+        "What happened in one game or practice vs. what the model expected from each player: standouts above and "
+        "below expectation, shooting by zone, turnovers, points per possession by play type, opponent numbers. "
+        "`session` is part of a title or a date (YYYY-MM-DD); null = the most recent session.",
+     "input_schema": _obj({"session": {"type": ["string", "null"]}})},
+    {"name": "get_inbox", "description":
+        "The coach's inbox: recent debriefs, significant trends, overdue homework and data gaps. Use for "
+        "'what should I know?' or 'catch me up'.", "input_schema": _obj({})},
     {"name": "get_play_types", "description":
         "Points per possession (PPP), frequency and turnover rate by play type (pick & roll, spot-up, post-up, "
         "...). Leave both null for our team's self-scout, set `player` for one of our players, or `opponent` "
@@ -120,7 +133,11 @@ How you work:
 - If the drill library lacks what the situation needs, design a custom drill, then use it.
 - When the coach states a lasting preference, save it with remember_coach_preference.
 - Use play types (get_play_types) to say what works: run more of what scores, fix or drop what doesn't.
-- When film exists, back a point with a playlist (build_playlist) so the coach and players can watch it."""
+- When film exists, back a point with a playlist (build_playlist) so the coach and players can watch it.
+- After a game, use get_session_report to say who beat or missed expectations and what to practise next.
+- When the coach asks you to write to a player, write a short, warm message they can send as-is, from the
+  player's real numbers and homework.
+- <screen_context> tells you what the coach is looking at in the app; use it to resolve "him", "this", "them"."""
 
 
 class Agent:
@@ -153,12 +170,18 @@ class Agent:
         return next((o for o in rows if n in o["name"].lower() or o["name"].lower() in n), None)
 
     def system_prompt(self) -> str:
+        return "\n\n".join(b["text"] for b in self.system_blocks())
+
+    def system_blocks(self) -> list[dict]:
+        """Stable instructions first (cached together with the tool list), then this team's context."""
         team = self.db.one("SELECT * FROM teams WHERE id = ?", (self.team_id,))
         memory = self.db.settings(self.team_id).get("coach_memory", [])
-        s = SYSTEM + f"\n\nTeam: {team['name']} ({team.get('level') or 'level not set'})."
+        ctx = (f"Team: {team['name']} ({team.get('level') or 'level not set'}). "
+               f"Today is {datetime.now(timezone.utc).date().isoformat()}.")
         if memory:
-            s += "\n\nWhat you know about this coach:\n" + "\n".join(f"- {m}" for m in memory)
-        return s
+            ctx += "\n\nWhat you know about this coach:\n" + "\n".join(f"- {m}" for m in memory)
+        return [{"type": "text", "text": SYSTEM, "cache_control": {"type": "ephemeral"}},
+                {"type": "text", "text": ctx}]
 
     # ------------------------------------------------------------- tools
     def run_tool(self, name: str, args: dict):
@@ -200,6 +223,30 @@ class Agent:
                     "known": [x["name"] for x in self.db.q("SELECT name FROM opponents WHERE team_id = ?", (self.team_id,))]}
         return insights.matchup(self.db, self.team_id, o["id"])
 
+    def t_get_progress(self, name):
+        from .coach_ai import player_history
+        p = self._find_player(name)
+        if not p:
+            return {"error": f"no player matching '{name}'"}
+        h = player_history(self.db, p["id"])
+        return {"player": p["name"], "dates": h["dates"],
+                "series": {DIMENSIONS[d][0]: v for d, v in h["series"].items()},
+                "change_last_4_weeks": {DIMENSIONS[d][0]: v for d, v in h["change"].items()}}
+
+    def t_get_session_report(self, session):
+        from .coach_ai import session_report
+        rows = self.db.q("SELECT id, title, date FROM sessions WHERE team_id = ? ORDER BY date DESC", (self.team_id,))
+        if session:
+            n = session.lower()
+            rows = [r for r in rows if n in (r["title"] or "").lower() or r["date"].startswith(session)]
+        if not rows:
+            return {"error": f"no session matching '{session}'"}
+        return session_report(self.db, rows[0]["id"])
+
+    def t_get_inbox(self):
+        from .coach_ai import inbox
+        return inbox(self.db, self.team_id, insights.team_snapshot(self.db, self.team_id))
+
     def t_get_play_types(self, player, opponent):
         if opponent:
             o = self._find_opponent(opponent)
@@ -225,10 +272,10 @@ class Agent:
         return {"playlist_id": pl["id"], "title": pl["title"], "clips": len(pl["clips"]),
                 "first": pl["clips"][:5]}
 
-    def t_plan_practice(self, minutes, players, hoops, max_intensity, focus, opponent):
+    def t_plan_practice(self, minutes, players, hoops, max_intensity, focus, opponent, full_court=True):
         o = self._find_opponent(opponent)
         req = dr.PlanRequest(minutes=max(15, min(minutes, 240)), players=max(1, players), hoops=max(0, hoops),
-                             max_intensity=max_intensity, focus=focus)
+                             max_intensity=max_intensity, focus=focus, full_court=full_court)
         plan = insights.practice_plan(self.db, self.team_id, req, o["id"] if o else None)
         plan["id"] = self.db.insert("plans", {"team_id": self.team_id, "created_at": now_iso(),
                                               "request": json.dumps(req.__dict__), "plan": json.dumps(plan)})
@@ -324,7 +371,7 @@ class Agent:
         return {"drill_id": did, "saved": True}
 
     # ------------------------------------------------------------- loop
-    def chat(self, message: str, chat_id: int | None = None) -> dict:
+    def chat(self, message: str, chat_id: int | None = None, context: str | None = None) -> dict:
         client = ai.get_client()
         row = self.db.one("SELECT * FROM chats WHERE id = ? AND team_id = ?", (chat_id, self.team_id)) if chat_id else None
         if not row:
@@ -333,11 +380,17 @@ class Agent:
             messages = []
         else:
             messages = json.loads(row["messages"])
-        messages.append({"role": "user", "content": message})
+        if context:  # what the coach is looking at in the app when they ask
+            messages.append({"role": "user", "content": [
+                {"type": "text", "text": f"<screen_context>{context}</screen_context>"},
+                {"type": "text", "text": message}]})
+        else:
+            messages.append({"role": "user", "content": message})
         reply, stop = "", None
         for _ in range(MAX_STEPS):
             resp = client.beta.messages.create(
-                model=ai.MODEL, max_tokens=16000, system=self.system_prompt(), tools=TOOLS,
+                model=ai.MODEL, max_tokens=16000, system=self.system_blocks(), tools=TOOLS,
+                cache_control={"type": "ephemeral"},   # caches the growing conversation turn to turn
                 output_config={"effort": ai.EFFORT}, messages=messages, **ai.FALLBACK_KW)
             stop = resp.stop_reason
             messages.append({"role": "assistant", "content": [ai.dump_block(b) for b in resp.content]})
@@ -380,4 +433,9 @@ def history(db: DB, team_id: int, chat_id: int) -> list[dict]:
                 out[-1]["text"] += "\n\n" + text      # several steps of one turn -> one bubble
             elif text:
                 out.append({"role": "assistant", "text": text})
+        else:  # user turn with screen context (tool results have no text blocks)
+            text = "".join(b.get("text", "") for b in m["content"]
+                           if b.get("type") == "text" and not b.get("text", "").startswith("<screen_context>"))
+            if text:
+                out.append({"role": "user", "text": text})
     return out

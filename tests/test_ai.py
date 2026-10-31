@@ -82,7 +82,9 @@ def test_agent_plans_with_tools_and_keeps_history(demo):
     call = msgs.calls[0]
     assert call["model"] == "claude-opus-5-5" and call["output_config"] == {"effort": "medium"}
     assert call["fallbacks"] == "default" and call["betas"] == ["server-side-fallback-2026-07-01"]
-    assert "Hapoel Demo U18" in call["system"]
+    # stable instructions cached (with the tools ahead of them), team context after the breakpoint
+    assert call["system"][0]["cache_control"] == {"type": "ephemeral"} and "Hapoel Demo U18" in call["system"][1]["text"]
+    assert call["cache_control"] == {"type": "ephemeral"}
     # tool results went back in one user message, matched by id
     results = msgs.calls[1]["messages"][-1]["content"]
     assert [x["tool_use_id"] for x in results] == ["t1", "t2"]

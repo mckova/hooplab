@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
 
-from . import ai, ingest, insights, llm, perception
+from . import ai, coach_ai, ingest, insights, llm, perception
 from . import drills as dr
 from .agent import Agent, history
 from .db import DB, now_iso
@@ -95,6 +95,7 @@ class PlanIn(BaseModel):
     players: int = Field(12, ge=1, le=30)
     hoops: int = Field(2, ge=0, le=12)
     max_intensity: Literal["low", "medium", "high"] = "high"
+    full_court: bool = True
     focus: list[str] = Field(default_factory=list)
     exclude: list[str] = Field(default_factory=list)
     opponent_id: int | None = None
@@ -110,6 +111,7 @@ class FeedbackIn(BaseModel):
 class SettingsIn(BaseModel):
     emphasis: dict[str, float] | None = None
     half_life_days: float | None = Field(None, gt=0, le=365)
+    language: Literal["en", "he"] | None = None   # language for AI-written debriefs and messages
 
 
 class HomeworkDone(BaseModel):
@@ -214,6 +216,19 @@ def create_session(team_id: int, s: SessionIn):
     return _get("sessions", db.insert("sessions", {**s.model_dump(), "team_id": team_id}))
 
 
+def _lang_of(team_id: int) -> str:
+    return db.settings(team_id).get("language", "en")
+
+
+def _debrief_now(session_id: int) -> None:
+    """Post-session debrief into the coach's inbox (runs after the response is sent)."""
+    try:
+        s = _get("sessions", session_id)
+        coach_ai.debrief(db, session_id, _lang_of(s["team_id"]))
+    except Exception:  # a debrief must never break ingest
+        pass
+
+
 def _store_events(session: dict, events: list[dict], source: str) -> int:
     try:
         return ingest.store_events(db, session, events, source)
@@ -232,7 +247,7 @@ def add_events(session_id: int, events: list[EventIn]):
 
 
 @app.post("/api/sessions/{session_id}/events.csv", status_code=201)
-async def add_events_csv(session_id: int, file: UploadFile = File(...)):
+async def add_events_csv(session_id: int, bg: BackgroundTasks, file: UploadFile = File(...)):
     """CSV columns: player_number|player_id, type, outcome(1/0), zone, assist, opponent(1/0),
     optional play_type, t_start, t_end."""
     s = _get("sessions", session_id)
@@ -256,7 +271,9 @@ async def add_events_csv(session_id: int, file: UploadFile = File(...)):
         except (KeyError, ValueError, ValidationError) as exc:
             raise HTTPException(422, f"CSV line {i}: {exc}") from exc
         rows.append(ev.model_dump())
-    return {"stored": _store_events(s, rows, "csv")}
+    stored = _store_events(s, rows, "csv")
+    bg.add_task(_debrief_now, session_id)
+    return {"stored": stored}
 
 
 def _ingest_tracks(session: dict, tracks: dict, our_team: int) -> dict:
@@ -264,19 +281,22 @@ def _ingest_tracks(session: dict, tracks: dict, our_team: int) -> dict:
 
 
 @app.post("/api/sessions/{session_id}/tracks")
-def add_tracks(session_id: int, body: TracksIn):
+def add_tracks(session_id: int, body: TracksIn, bg: BackgroundTasks):
     """Ingest a track file (from the YOLO backend or any external tracker)."""
     s = _get("sessions", session_id)
     try:
-        return _ingest_tracks(s, body.tracks, body.our_team)
+        out = _ingest_tracks(s, body.tracks, body.our_team)
     except (KeyError, ValueError, TypeError) as exc:
         raise HTTPException(422, f"bad track file: {exc}") from exc
+    bg.add_task(_debrief_now, session_id)
+    return out
 
 
 def _process_video(session_id: int, path: str, court_points, roster_map, our_team):
     try:
         tracks = YoloTrackBackend().process(path, court_points, roster_map)
         _ingest_tracks(_get("sessions", session_id), tracks, our_team)
+        _debrief_now(session_id)
     except Exception as exc:
         db.update("sessions", session_id, {"status": f"failed: {str(exc)[:120]}"})
 
@@ -325,6 +345,8 @@ def put_settings(team_id: int, s: SettingsIn):
         db.set_setting(team_id, "emphasis", s.emphasis)
     if s.half_life_days is not None:
         db.set_setting(team_id, "half_life_days", s.half_life_days)
+    if s.language is not None:
+        db.set_setting(team_id, "language", s.language)
     return {k: v for k, v in db.settings(team_id).items() if k != "truth"}
 
 
@@ -490,10 +512,72 @@ def scouting_report(opponent_id: int, lang: Literal["en", "he"] = "en"):
     return {**llm.scouting_report(facts, lang), "facts": facts}
 
 
+# ------------------------------------------------------------------ coach loop: debriefs, inbox, progress, players
+@app.get("/api/sessions/{session_id}/report")
+def session_report(session_id: int):
+    """Deterministic: what happened vs. what the model expected from each player."""
+    _get("sessions", session_id)
+    return coach_ai.session_report(db, session_id)
+
+
+@app.post("/api/sessions/{session_id}/debrief", status_code=201)
+def session_debrief(session_id: int, lang: Literal["en", "he"] | None = None):
+    """Claude writes the post-session debrief (template without a key) and posts it to the inbox."""
+    s = _get("sessions", session_id)
+    return coach_ai.debrief(db, session_id, lang or _lang_of(s["team_id"]))
+
+
+@app.get("/api/teams/{team_id}/inbox")
+def team_inbox(team_id: int):
+    _get("teams", team_id)
+    return coach_ai.inbox(db, team_id, insights.team_snapshot(db, team_id))
+
+
+@app.get("/api/players/{player_id}/history")
+def player_history(player_id: int, weeks: int = 10):
+    _get("players", player_id)
+    return coach_ai.player_history(db, player_id, points=max(2, min(weeks, 52)))
+
+
+@app.get("/api/players/{player_id}/message")
+def player_message(player_id: int, lang: Literal["en", "he"] | None = None):
+    """A personal message to the player, ready to send: written by Claude from the model's facts."""
+    p = _get("players", player_id)
+    snap = insights.team_snapshot(db, p["team_id"])
+    card = next(c for c in snap["players"] if c["player"]["id"] == player_id)
+    return coach_ai.player_message(db, card, lang or _lang_of(p["team_id"]), trends=snap["trends"])
+
+
+@app.post("/api/teams/{team_id}/players.csv", status_code=201)
+async def import_roster(team_id: int, file: UploadFile = File(...)):
+    """Roster import. CSV columns: name, number, position (PG/SG/SF/PF/C), optional height_cm, hand, notes.
+    Existing players (same number) are updated, new ones added."""
+    _get("teams", team_id)
+    text = (await file.read()).decode("utf-8-sig")
+    existing = {r["number"]: r["id"] for r in db.q("SELECT id, number FROM players WHERE team_id = ?", (team_id,))}
+    added = updated = 0
+    for i, r in enumerate(csv.DictReader(io.StringIO(text)), start=2):
+        try:
+            p = PlayerIn(name=r["name"].strip(), number=int(r["number"]) if (r.get("number") or "").strip() else None,
+                         position=r["position"].strip().upper(),
+                         height_cm=int(r["height_cm"]) if (r.get("height_cm") or "").strip() else None,
+                         hand=(r.get("hand") or "").strip().upper() or None, notes=(r.get("notes") or "").strip() or None)
+        except (KeyError, ValueError, ValidationError) as exc:
+            raise HTTPException(422, f"roster line {i}: {exc}") from exc
+        if p.number is not None and p.number in existing:
+            db.update("players", existing[p.number], p.model_dump())
+            updated += 1
+        else:
+            db.insert("players", {**p.model_dump(), "team_id": team_id})
+            added += 1
+    return {"added": added, "updated": updated}
+
+
 # ------------------------------------------------------------------ AI-native
 class ChatIn(BaseModel):
     message: str = Field(min_length=1, max_length=8000)
     chat_id: int | None = None
+    context: str | None = Field(None, max_length=2000)   # what the coach is looking at ("player: Noam Levi")
 
 
 class NotesIn(BaseModel):
@@ -511,7 +595,7 @@ def _ai_guard(fn, *args, **kw):
 def chat(team_id: int, body: ChatIn):
     """Talk to the assistant-coach agent (Claude + HoopLab tools)."""
     _get("teams", team_id)
-    return _ai_guard(Agent(db, team_id).chat, body.message, body.chat_id)
+    return _ai_guard(Agent(db, team_id).chat, body.message, body.chat_id, body.context)
 
 
 @app.get("/api/teams/{team_id}/chats")
@@ -543,16 +627,19 @@ def _store_ai(session: dict, result: dict, source: str) -> dict:
 
 
 @app.post("/api/sessions/{session_id}/notes", status_code=201)
-def notes(session_id: int, body: NotesIn):
+def notes(session_id: int, body: NotesIn, bg: BackgroundTasks):
     """Free-text coach notes (any language) -> events, via Claude structured outputs."""
     s = _get("sessions", session_id)
     players, opp = _session_players(s)
     result = _ai_guard(perception.events_from_notes, body.notes, players, opp)
-    return _store_ai(s, result, "notes")
+    out = _store_ai(s, result, "notes")
+    if out["stored"]:
+        bg.add_task(_debrief_now, session_id)
+    return out
 
 
 @app.post("/api/sessions/{session_id}/film", status_code=201)
-async def film(session_id: int, files: list[UploadFile] = File(...), context: str = "",
+async def film(session_id: int, bg: BackgroundTasks, files: list[UploadFile] = File(...), context: str = "",
                our_color: str | None = None):
     """Frames (images) or a short clip -> events + scouting notes, via Claude vision."""
     s = _get("sessions", session_id)
@@ -575,4 +662,7 @@ async def film(session_id: int, files: list[UploadFile] = File(...), context: st
         raise HTTPException(422, "no frames")
     players, _ = _session_players(s)
     result = _ai_guard(perception.events_from_images, images, players, context, our_color)
-    return _store_ai(s, result, "film-ai")
+    out = _store_ai(s, result, "film-ai")
+    if out["stored"]:
+        bg.add_task(_debrief_now, session_id)
+    return out

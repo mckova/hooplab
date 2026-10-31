@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
@@ -54,6 +55,10 @@ CREATE TABLE IF NOT EXISTS playlists (
   id INTEGER PRIMARY KEY, team_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
   player_id INTEGER REFERENCES players(id) ON DELETE CASCADE, title TEXT NOT NULL, note TEXT,
   items TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS feed (
+  id INTEGER PRIMARY KEY, team_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, source TEXT, ref TEXT,
+  created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS plans (
   id INTEGER PRIMARY KEY, team_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
   created_at TEXT NOT NULL, request TEXT NOT NULL, plan TEXT NOT NULL);
@@ -67,6 +72,8 @@ def now_iso() -> str:
 class DB:
     def __init__(self, path: str = "hooplab.db"):
         self.path = path
+        # one connection shared by the API's worker threads: every use goes through this lock
+        self.lock = threading.RLock()
         self.conn = sqlite3.connect(path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
@@ -86,18 +93,21 @@ class DB:
 
     @contextmanager
     def tx(self):
-        try:
-            yield self.conn
-            self.conn.commit()
-        except Exception:
-            self.conn.rollback()
-            raise
+        with self.lock:
+            try:
+                yield self.conn
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
 
     def q(self, sql: str, args=()) -> list[dict]:
-        return [dict(r) for r in self.conn.execute(sql, args).fetchall()]
+        with self.lock:
+            return [dict(r) for r in self.conn.execute(sql, args).fetchall()]
 
     def one(self, sql: str, args=()) -> dict | None:
-        r = self.conn.execute(sql, args).fetchone()
+        with self.lock:
+            r = self.conn.execute(sql, args).fetchone()
         return dict(r) if r else None
 
     def insert(self, table: str, row: dict) -> int:
