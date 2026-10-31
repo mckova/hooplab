@@ -18,7 +18,7 @@ re-measure**. These are the decisions that shape it.
 4. **Shot zone from court coordinates.** The shooter's foot point at release is
    projected through a homography fitted to four court corners, giving rim / mid
    / three by FIBA distances instead of image heuristics.
-5. **Events, not metrics, are the unit of learning.** Every detected or tagged
+5. **Events are the unit of learning.** Every detected or tagged
    event maps to a skill dimension with a success/failure outcome, so video,
    bench tagging, CSV imports, coach notes read by Claude and homework logs all
    feed one model, each at its own weight.
@@ -65,7 +65,7 @@ re-measure**. These are the decisions that shape it.
     at reduced weight (0.7 for notes, 0.5 for film AI) so they inform but do not
     dominate tracked data.
 
-15. **Claude in the loop, not beside it.** Every import of a game or practice
+15. **Claude inside the loop.** Every import of a game or practice
     triggers a debrief: the engine compares each player with their own
     estimate *before* that session (a z-score per skill, flagged at |z| ≥ 1.5
     with at least 4 attempts), Claude writes it up, and it lands in the coach's
@@ -80,14 +80,23 @@ re-measure**. These are the decisions that shape it.
 
 ## Interface
 
-* One dark ground, one accent (ball orange), tinted neutrals, a 4px spacing
-  scale, one radius scale and three elevations.
+The interface reads like the coach's whiteboard: a light ground that works in a
+bright gym and on paper, ink lines, and one orange accent for our team and the
+primary action. The full system (colors, type, spacing, rules) is in
+[DESIGN.md](../DESIGN.md).
+
+* The signature element is the half-court shot chart: each zone shows the
+  player's rate against what the position expects, and selecting a zone plays
+  those shots.
+* Practice plans are laid out on the clock (18:00, 18:08...), the way a coach
+  writes them on the board.
 * Motion only on `transform` and `opacity`, under 250 ms, with a strong
   ease-out; dialogs and toasts enter with `@starting-style`; reduced motion
-  removes movement and keeps fades.
+  removes movement.
 * Accessible by default: real buttons for every action, labelled icon
   buttons, a dialog that traps focus and returns it, keyboard-operable table
-  rows and cards, visible focus, `aria-live` status messages.
+  rows, visible focus, 44px targets on touch screens, `aria-live` status
+  messages.
 * Destructive actions confirm in place; no browser `prompt()` or `confirm()`.
 
 ## Validation

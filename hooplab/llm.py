@@ -81,7 +81,7 @@ def template_scouting(f: dict) -> str:
     if f["game_plan"]:
         out.append("\n## Game plan")
         for g in f["game_plan"][:4]:
-            out.append(f"- {g['insight']} ({g['evidence']})")
+            out.append(f"- {g['insight']} Evidence: {g['evidence']}.")
     op = [r for r in f["our_play_types"] if r["reliable"]]
     if op:
         best = max(op, key=lambda r: r["ppp"])
@@ -89,8 +89,8 @@ def template_scouting(f: dict) -> str:
     edges = sorted([r for r in f["comparison"] if r["edge"] is not None], key=lambda r: r["edge"])
     if edges:
         out.append("\n## Edges")
-        out.append(f"- Biggest edge for us: {edges[-1]['name']} ({edges[-1]['us']:.0%} vs {edges[-1]['them']:.0%})")
-        out.append(f"- Biggest edge for them: {edges[0]['name']} ({edges[0]['them']:.0%} vs {edges[0]['us']:.0%})")
+        out.append(f"- Biggest edge for us: {edges[-1]['name']}, {edges[-1]['us']:.0%} against {edges[-1]['them']:.0%}.")
+        out.append(f"- Biggest edge for them: {edges[0]['name']}, {edges[0]['them']:.0%} against {edges[0]['us']:.0%}.")
     return "\n".join(out)
 
 

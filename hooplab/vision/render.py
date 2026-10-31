@@ -5,9 +5,10 @@ from __future__ import annotations
 import shutil
 import subprocess
 
-# Top-down tracking view in the app's palette: dark floor, hairline court, players as numbered discs.
-TEAM_COLORS = {1: (242, 140, 40), 2: (106, 168, 232), None: (150, 158, 168)}
-FLOOR, COURT, LINE, INK = (14, 16, 19), (24, 28, 34), (70, 79, 92), (233, 236, 239)
+# Top-down tracking view drawn like the app's whiteboard: pale floor, ink lines, our team in orange.
+TEAM_COLORS = {1: (184, 67, 15), 2: (20, 23, 28), None: (140, 145, 138)}
+LABEL = {1: (255, 248, 242), 2: (244, 244, 240), None: (20, 23, 28)}
+FLOOR, COURT, LINE, INK = (233, 234, 228), (252, 252, 250), (20, 23, 28), (20, 23, 28)
 
 
 def render_mp4(tracks: dict, out_path: str, scale: float = 0.5, size=(1320, 800),
@@ -48,20 +49,20 @@ def render_mp4(tracks: dict, out_path: str, scale: float = 0.5, size=(1320, 800)
             rc = (hx1 + hx2) / 2
             ry = my if court else (hy1 + hy2) / 2     # top-down view: the rim sits over its floor point
             rr = (hx2 - hx1) / 2
-            d.ellipse([rc - rr, ry - rr, rc + rr, ry + rr], outline=(229, 103, 95), width=2)
+            d.ellipse([rc - rr, ry - rr, rc + rr, ry + rr], outline=(184, 67, 15), width=2)
             d.line([(rc + rr + 3, ry - 14), (rc + rr + 3, ry + 14)], fill=INK, width=3)
         rad = max(7, int(11 * scale * 2))
         for tid, p in (fr.get("players") or {}).items():
             x1, y1, x2, y2 = [v * scale for v in p["bbox"]]
             cx, cy = (x1 + x2) / 2, y2 - rad
             col = TEAM_COLORS.get(p.get("team"), TEAM_COLORS[None])
-            d.ellipse([cx - rad, cy - rad, cx + rad, cy + rad], fill=col, outline=FLOOR, width=2)
-            d.text((cx, cy), str(labels.get(str(tid), tid)).lstrip("#"), fill=FLOOR, anchor="mm")
+            d.ellipse([cx - rad, cy - rad, cx + rad, cy + rad], fill=col, outline=COURT, width=2)
+            d.text((cx, cy), str(labels.get(str(tid), tid)).lstrip("#"), fill=LABEL.get(p.get("team"), LABEL[None]), anchor="mm")
         if fr.get("ball"):
             bx1, by1, bx2, by2 = [v * scale for v in fr["ball"]]
             bc, br = ((bx1 + bx2) / 2, (by1 + by2) / 2), max(4, (bx2 - bx1) / 2 + 1)
-            d.ellipse([bc[0] - br, bc[1] - br, bc[0] + br, bc[1] + br], fill=(255, 176, 102), outline=FLOOR, width=1)
-        d.text((10, 8), f"{i / fps:4.1f}s", fill=(111, 120, 132))
+            d.ellipse([bc[0] - br, bc[1] - br, bc[0] + br, bc[1] + br], fill=(232, 120, 40), outline=INK, width=1)
+        d.text((10, 8), f"{i / fps:4.1f}s", fill=(87, 93, 102))
         proc.stdin.write(img.tobytes())
     proc.stdin.close()
     if proc.wait() != 0:

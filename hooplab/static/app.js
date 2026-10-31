@@ -1,154 +1,146 @@
-// HoopLab front-end: vanilla JS, no build step.
+// HoopLab front end: vanilla JS, no build step. Every view reads the model through the JSON API.
 const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const pct = (v) => (v == null ? "–" : `${Math.round(v * 100)}%`);
-let TEAM = null, META = null, DRILLS = {};
+const pct = (v) => (v == null ? "n/a" : `${Math.round(v * 100)}%`);
+const trim = (t) => String(t ?? "").trim().replace(/[.。]+$/, "");
+const signed = (v) => { const n = Math.round(v * 100); return n === 0 ? "0" : `${n > 0 ? "+" : "−"}${Math.abs(n)}`; };
+const nf = new Intl.NumberFormat("en-US");
+const dateFmt = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short" });
+const day = (iso) => (iso ? dateFmt.format(new Date(iso)) : "");
+const first = (name) => String(name || "").trim().split(/\s+/)[0];
+let TEAM = null, META = null, DRILLS = {}, VIEW = "today", PLAYER = null, OPP = null;
 
-// One small stroke icon set (decorative: aria-hidden; buttons carry the label).
-const svg = (d, extra = "") => `<svg class="i" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" ${extra}>${d}</svg>`;
+// Short labels for the ten skills; the model's long names stay in tooltips and reports.
+const SHORT = { rim_finishing: "Rim", midrange: "Mid-range", three_point: "Three", free_throw: "Free throws",
+  ball_security: "Ball security", playmaking: "Playmaking", on_ball_defense: "On-ball D", help_defense: "Help D",
+  rebounding: "Rebounding", transition: "Transition" };
+const GROUPS = [["scoring", "Scoring"], ["playmaking", "Playmaking"], ["defense", "Defense and boards"], ["athletic", "Effort"]];
+const short = (d) => SHORT[d] || META.dimensions[d]?.name || d;
+
+const svg = (d) => `<svg class="i" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
 const ICON = {
-  film: svg('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4"/>'),
-  spark: svg('<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 17l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"/>'),
-  mic: svg('<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0014 0M12 18v3"/>'),
-  close: svg('<path d="M6 6l12 12M18 6L6 18"/>'),
-  doc: svg('<path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/>'),
-  send: svg('<path d="M21 3L10 14M21 3l-7 18-4-7-7-4z"/>'),
-  up: svg('<path d="M7 10v11H4V10zM7 10l4-7a2 2 0 012 2v4h6a2 2 0 012 2.3l-1.3 8A2 2 0 0117.7 21H7"/>'),
-  down: svg('<path d="M17 14V3h3v11zM17 14l-4 7a2 2 0 01-2-2v-4H5a2 2 0 01-2-2.3l1.3-8A2 2 0 016.3 3H17"/>'),
-  play: svg('<path d="M7 4l13 8-13 8z"/>'),
+  today: svg('<rect x="3.5" y="5" width="17" height="15" rx="1.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/>'),
+  assistant: svg('<path d="M4 5.5h16v10H9l-5 4z"/><path d="M8 9.5h8M8 12.5h5"/>'),
+  roster: svg('<circle cx="9" cy="8" r="3.2"/><path d="M3 19.5c.6-3.3 3-5 6-5s5.4 1.7 6 5"/><path d="M16 5.2a3 3 0 010 5.6M18 14.8c1.6.7 2.6 2.2 3 4.7"/>'),
+  practice: svg('<circle cx="12" cy="13" r="7.5"/><path d="M12 9v4l2.5 2M10 2.5h4"/>'),
+  homework: svg('<path d="M6 3.5h9l3 3v14H6z"/><path d="M9 11l2 2 4-4M9 17h6"/>'),
+  opponents: svg('<path d="M5 5l6 6M11 5l-6 6"/><circle cx="16.5" cy="16.5" r="3.5"/>'),
+  film: svg('<rect x="3" y="5" width="18" height="14" rx="1.5"/><path d="M10 9.5v5l4.5-2.5z"/>'),
+  mic: svg('<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0013 0M12 17.5V21"/>'),
+  send: svg('<path d="M5 12h13M13 6l6 6-6 6"/>'),
 };
+const VIEWS = [["today", "Today"], ["assistant", "Assistant"], ["roster", "Roster"], ["practice", "Practice plan"],
+  ["homework", "Homework"], ["opponents", "Opponents"], ["film", "Film room"]];
 
 async function api(path, opts = {}) {
   const init = { ...opts };
-  if (opts.json !== undefined) {
-    init.body = JSON.stringify(opts.json);
-    init.headers = { "Content-Type": "application/json" };
-  }
+  if (opts.json !== undefined) { init.body = JSON.stringify(opts.json); init.headers = { "Content-Type": "application/json" }; }
   const r = await fetch(path, init);
   if (!r.ok) {
     let msg = r.statusText;
     try { const j = await r.json(); msg = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail); } catch {}
-    toast(`Error: ${msg}`);
-    throw new Error(msg);
+    toast(msg); throw new Error(msg);
   }
   return r.status === 204 ? null : r.json();
 }
 function toast(msg) {
   const t = $("#toast"); t.textContent = msg; t.classList.remove("hidden");
-  clearTimeout(t._h); t._h = setTimeout(() => t.classList.add("hidden"), 3500);
+  clearTimeout(t._h); t._h = setTimeout(() => t.classList.add("hidden"), 3600);
 }
+const writtenBy = (src) => (src === "template" ? "Drafted from the numbers. Claude was offline, so this is the plain version." : "Written by Claude from HoopLab's numbers.");
 
 // ---------------------------------------------------------------- shell
-document.querySelectorAll("#tabs button").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
-function showTab(name) {
-  document.querySelectorAll("#tabs button").forEach((b) => { b.classList.toggle("active", b.dataset.tab === name); b.setAttribute("aria-selected", b.dataset.tab === name); });
-  document.querySelectorAll(".tab").forEach((s) => s.classList.toggle("active", s.id === `tab-${name}`));
-  if (TEAM) RENDER[name]();
+$("#nav").innerHTML = VIEWS.map(([k, label]) => `<button type="button" data-view="${k}">${label}</button>`).join("");
+$$("#nav button").forEach((b) => b.addEventListener("click", () => go(b.dataset.view)));
+function go(view, opts = {}) {
+  VIEW = view;
+  if (opts.player !== undefined) PLAYER = opts.player;
+  $$("#nav button").forEach((b) => (b.dataset.view === view ? b.setAttribute("aria-current", "page") : b.removeAttribute("aria-current")));
+  const main = $("#main");
+  main.innerHTML = `<p class="loading">Loading…</p>`;
+  RENDER[view]().catch((e) => { main.innerHTML = `<p class="empty">This page could not load: ${esc(e.message)}</p>`; });
+  if (opts.focus !== false) main.focus({ preventScroll: true });
+  window.scrollTo(0, 0);
 }
-const current = () => document.querySelector("#tabs button.active").dataset.tab;
 
 async function loadTeams(select) {
   const teams = await api("/api/teams");
   const sel = $("#teamSelect");
-  sel.innerHTML = teams.map((t) => `<option value="${t.id}">${esc(t.name)} (${t.players})</option>`).join("");
+  sel.innerHTML = teams.map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join("");
   if (select) sel.value = select;
   TEAM = sel.value ? Number(sel.value) : null;
-  $("#empty").classList.toggle("hidden", !!TEAM);
-  document.querySelectorAll(".tab").forEach((s) => s.classList.toggle("hidden", !TEAM));
-  $("#tabs").classList.toggle("hidden", !TEAM);
-  $("#teamSelect").classList.toggle("hidden", !TEAM);
-  if (TEAM) { syncLang(); RENDER[current()](); }
+  document.body.classList.toggle("bare", !TEAM);
+  if (!TEAM) return firstRun();
+  const t = teams.find((x) => x.id === TEAM);
+  $("#teamMeta").textContent = `${t.players} player${t.players === 1 ? "" : "s"}${t.level ? ` · ${t.level}` : ""}`;
+  syncLang(); go(VIEW, { focus: false });
 }
-$("#teamSelect").addEventListener("change", (e) => { TEAM = Number(e.target.value); CHAT_ID = null; syncLang(); RENDER[current()](); });
-$("#heroDemo").addEventListener("click", () => $("#demoBtn").click());
-$("#heroNew").addEventListener("click", () => $("#newTeamBtn").click());
-$("#demoBtn").addEventListener("click", async () => {
+$("#teamSelect").addEventListener("change", (e) => { TEAM = Number(e.target.value); CHAT_ID = null; PLAYER = null; OPP = null; loadTeams(TEAM); });
+async function loadDemo() {
   const r = await api("/api/demo", { method: "POST" });
-  toast("Demo team loaded: 8 players, 10 weeks of games & practices");
-  loadTeams(r.team_id);
-});
+  toast("Demo team loaded: 8 players, 10 weeks of games and practices");
+  VIEW = "today"; loadTeams(r.team_id);
+}
+$("#demoBtn").addEventListener("click", loadDemo);
 $("#newTeamBtn").addEventListener("click", () => {
-  modal(`<h2>New team</h2><form class="form" id="teamForm"><label>Team name<input name="name" required autocomplete="off"></label>
-    <label>Level<input name="level" placeholder="e.g. U16 regional"></label><label>Coach<input name="coach"></label><button>Create team</button></form>
-    <p class="small muted">Next: add players one by one or import a roster CSV.</p>`);
+  modal(`<h2 id="modalTitle">New team</h2><form class="form-col" id="teamForm">
+    <label class="field">Team name<input name="name" required autocomplete="off" placeholder="Hapoel Galil U16"></label>
+    <div class="two"><label class="field">Level<input name="level" placeholder="U16 regional"></label><label class="field">Head coach<input name="coach"></label></div>
+    <div><button class="btn">Create team</button></div></form>`, "narrow");
   $("#teamForm [name=name]").focus();
   $("#teamForm").addEventListener("submit", async (e) => {
     e.preventDefault();
     const t = await api("/api/teams", { method: "POST", json: Object.fromEntries(new FormData(e.target)) });
-    closeModal(); await loadTeams(t.id); showTab("players");
+    closeModal(); VIEW = "roster"; loadTeams(t.id);
   });
 });
 
-$("#langSelect").addEventListener("change", async (e) => {
+$$(".seg [data-lang]").forEach((b) => b.addEventListener("click", async () => {
   if (!TEAM) return;
-  await api(`/api/teams/${TEAM}/settings`, { method: "PUT", json: { language: e.target.value } });
-  toast(e.target.value === "he" ? "דיווחים והודעות ייכתבו בעברית" : "AI reports and messages will be written in English");
-});
-async function syncLang() {
-  if (!TEAM) return;
-  const s = await api(`/api/teams/${TEAM}/settings`);
-  $("#langSelect").value = s.language || "en";
-}
+  await api(`/api/teams/${TEAM}/settings`, { method: "PUT", json: { language: b.dataset.lang } });
+  setLang(b.dataset.lang);
+  toast(b.dataset.lang === "he" ? "דיבריפים, דוחות והודעות לשחקנים ייכתבו בעברית" : "Debriefs, reports and player messages will be written in English");
+}));
+const setLang = (l) => $$(".seg [data-lang]").forEach((x) => x.setAttribute("aria-pressed", String(x.dataset.lang === l)));
+const LANG = () => $(".seg [aria-pressed=true]")?.dataset.lang || "en";
+async function syncLang() { if (TEAM) setLang((await api(`/api/teams/${TEAM}/settings`)).language || "en"); }
 
-// "Ask the assistant" from anywhere: jumps to the chat with what the coach is looking at.
+// "Ask about this" from any page: opens the assistant with what the coach is looking at.
 let PENDING_ASK = null;
-function ask(question, context) {
-  PENDING_ASK = { question, context };
-  showTab("assistant");
-}
-const askBtn = (q, ctx) => `<button class="ghost ask" data-ask="${esc(q)}" data-ctx="${esc(ctx)}">${ICON.spark} Ask the assistant</button>`;
-function bindAsk(el) { el.querySelectorAll("[data-ask]").forEach((b) => b.addEventListener("click", (e) => { e.stopPropagation(); ask(b.dataset.ask, b.dataset.ctx); })); }
+function ask(question, context) { PENDING_ASK = { question, context }; go("assistant"); }
+const askBtn = (label, q, ctx) => `<button type="button" class="btn quiet" data-ask="${esc(q)}" data-ctx="${esc(ctx)}">${esc(label)}</button>`;
+function bindAsk(el) { $$("[data-ask]", el).forEach((b) => b.addEventListener("click", (e) => { e.stopPropagation(); closeModal(); ask(b.dataset.ask, b.dataset.ctx); })); }
 
-// Voice input (browser speech recognition): dictate from the bench, in Hebrew or English.
-function micButton(target) {
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SR) return "";
-  return `<button type="button" class="ghost mic icon" data-mic="${target}" aria-label="Dictate" title="Dictate">${ICON.mic}</button>`;
-}
+// Dictation from the bench, Hebrew or English (browser speech recognition, where available).
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+const micButton = (target) => (SR ? `<button type="button" class="icon-btn" data-mic="${target}" aria-label="Dictate" title="Dictate">${ICON.mic}</button>` : "");
 function bindMic(el) {
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SR) return;
-  el.querySelectorAll("[data-mic]").forEach((b) => b.addEventListener("click", () => {
+  $$("[data-mic]", el).forEach((b) => b.addEventListener("click", () => {
     const ta = $(b.dataset.mic);
     if (b._rec) { b._rec.stop(); return; }
-    const rec = new SR(); rec.lang = $("#langSelect").value === "he" ? "he-IL" : "en-US"; rec.interimResults = false; rec.continuous = true;
+    const rec = new SR(); rec.lang = LANG() === "he" ? "he-IL" : "en-US"; rec.continuous = true;
     rec.onresult = (e) => { for (let i = e.resultIndex; i < e.results.length; i++) if (e.results[i].isFinal) ta.value += (ta.value ? " " : "") + e.results[i][0].transcript; };
-    rec.onend = () => { b._rec = null; b.classList.remove("on"); };
-    b._rec = rec; b.classList.add("on"); rec.start();
+    rec.onend = () => { b._rec = null; b.classList.remove("on"); b.setAttribute("aria-pressed", "false"); };
+    b._rec = rec; b.classList.add("on"); b.setAttribute("aria-pressed", "true"); rec.start();
   }));
 }
 
-// ---------------------------------------------------------------- widgets
-function skillBar(s) {
-  const x = (v) => (v * 100).toFixed(1);
-  const color = s.label === "strength" ? "var(--good)" : s.label === "weakness" ? "var(--bad)" : "var(--info)";
-  return `<div class="skill" title="${esc(s.name)}: ${pct(s.mean)} (80% interval ${pct(s.low)}–${pct(s.high)}), expected ${pct(s.baseline)} · ${s.evidence} weighted observations">
-    <span>${esc(s.name)}</span>
-    <svg viewBox="0 0 100 16" preserveAspectRatio="none">
-      <rect x="0" y="6" width="100" height="4" fill="#2a333d" rx="2"/>
-      <rect x="${x(s.low)}" y="5" width="${Math.max(0.6, x(s.high) - x(s.low))}" height="6" fill="${color}" opacity=".35" rx="2"/>
-      <rect x="${x(s.mean) - 0.6}" y="2" width="1.2" height="12" fill="${color}"/>
-      <rect x="${x(s.baseline) - 0.3}" y="0" width="0.6" height="16" fill="#e7ecf1" opacity=".7"/>
-    </svg>
-    <span>${pct(s.mean)}${s.trend ? (s.trend > 0 ? " ▲" : " ▼") : ""}</span></div>`;
-}
-const legend = `<div class="legend"><span><i style="background:var(--good)"></i>strength</span><span><i style="background:var(--bad)"></i>weakness</span><span><i style="background:var(--info)"></i>in range</span><span>bar = 80% interval · white tick = expected for position</span></div>`;
-const pills = (arr, cls) => arr.map((s) => `<span class="pill ${cls}">${esc(s.name)} ${pct(s.mean)}</span>`).join("") || `<span class="muted small">none confirmed yet</span>`;
-
-// ---------------------------------------------------------------- film: clip player, play types
-const ptName = (k) => META.play_types[k] || k;
-// Dialog: focus moves in, Tab stays inside, Escape closes, focus returns to the trigger.
+// ---------------------------------------------------------------- dialog
 let MODAL_RETURN = null;
-function modal(html) {
+function modal(html, size = "") {
   const m = $("#modal"), opening = m.classList.contains("hidden");
   if (opening) MODAL_RETURN = document.activeElement;
+  $(".modal-box", m).className = `modal-box ${size}`;
   $("#modalBody").innerHTML = html;
   m.classList.remove("hidden");
   if (opening) $("#modalClose").focus();
 }
 function closeModal() {
-  const v = $("#modal video"); if (v) v.pause();
-  $("#modal").classList.add("hidden");
+  const m = $("#modal"); if (m.classList.contains("hidden")) return;
+  const v = $("video", m); if (v) v.pause();
+  m.classList.add("hidden");
   if (MODAL_RETURN && document.contains(MODAL_RETURN)) MODAL_RETURN.focus();
 }
 $("#modalClose").addEventListener("click", closeModal);
@@ -157,58 +149,69 @@ document.addEventListener("keydown", (e) => {
   if ($("#modal").classList.contains("hidden")) return;
   if (e.key === "Escape") { e.preventDefault(); closeModal(); return; }
   if (e.key !== "Tab") return;
-  const f = [...$("#modal").querySelectorAll("button, a[href], input, select, textarea, video, [tabindex]:not([tabindex='-1'])")].filter((x) => !x.disabled && x.offsetParent);
+  const f = $$("#modal button, #modal a[href], #modal input, #modal select, #modal textarea, #modal video, #modal [tabindex]:not([tabindex='-1'])").filter((x) => !x.disabled && x.offsetParent);
   if (!f.length) return;
   if (e.shiftKey && document.activeElement === f[0]) { e.preventDefault(); f[f.length - 1].focus(); }
   else if (!e.shiftKey && document.activeElement === f[f.length - 1]) { e.preventDefault(); f[0].focus(); }
 });
-const clipLabel = (c) => `${c.player ? esc(c.player) + " · " : ""}${esc(c.type)}${c.zone ? " " + esc(c.zone) : ""} ${c.outcome == null ? "" : c.outcome ? "✓" : "✗"}${c.play_type ? ` <span class="pill">${esc(ptName(c.play_type))}</span>` : ""}`;
 
-// Plays each clip from t_start to t_end, then moves to the next one.
+// ---------------------------------------------------------------- film: the clip player
+const ptName = (k) => META.play_types[k] || k;
+const TYPE_WORD = { shot: "Shot", pass: "Pass", turnover: "Turnover", touch: "Touch", creation: "Created shot", defense: "Defense", rotation: "Rotation", steal: "Steal", rebound: "Rebound", sprint: "Sprint back" };
+const ZONE_WORD = { rim: "at the rim", mid: "mid-range", three: "from three", ft: "free throw" };
+function clipLabel(c) {
+  const what = `${TYPE_WORD[c.type] || c.type}${c.zone ? ` ${ZONE_WORD[c.zone] || c.zone}` : ""}`;
+  const res = c.outcome == null ? "" : c.type === "shot" ? (c.outcome ? ", made" : ", missed") : c.outcome ? ", good" : ", bad";
+  return `${c.player ? esc(first(c.player)) + ": " : ""}${esc(what)}${res}`;
+}
 function clipPlayer(title, clips, sub = "") {
-  if (!clips.length) return toast("No film for this yet: upload video to a game to make every number clickable");
-  modal(`<h3>${esc(title)} <span class="muted small">${clips.length} clip${clips.length > 1 ? "s" : ""}</span></h3>${sub ? `<p class="small muted">${esc(sub)}</p>` : ""}
-    <div class="player-wrap"><video id="clipVideo" controls muted playsinline preload="auto"></video>
-    <div class="clip-list">${clips.map((c, i) => `<div class="clip" data-i="${i}"><b>${i + 1}.</b> ${clipLabel(c)}<div class="muted">${esc(c.session)} · ${c.t_start.toFixed(1)}–${c.t_end.toFixed(1)}s</div></div>`).join("")}</div></div>`);
+  if (!clips.length) return toast("No film behind this yet. Upload video to a game and every number here becomes playable.");
+  modal(`<h2 id="modalTitle">${esc(title)}</h2><p class="note">${clips.length} clip${clips.length > 1 ? "s" : ""}${sub ? ` · ${esc(sub)}` : ""}</p>
+    <div class="clips"><video id="clipVideo" class="video" controls muted playsinline preload="auto"></video>
+    <ol>${clips.map((c, i) => `<li><button type="button" data-i="${i}"><b>${i + 1}</b><span>${clipLabel(c)}${c.play_type ? ` · ${esc(ptName(c.play_type))}` : ""}</span>
+      <span class="sub">${esc(c.session)}, ${c.t_start.toFixed(1)} to ${c.t_end.toFixed(1)} s</span></button></li>`).join("")}</ol></div>`);
   const v = $("#clipVideo"); let i = 0;
   const play = (k) => {
     i = k; const c = clips[i];
-    document.querySelectorAll("#modal .clip").forEach((el) => el.classList.toggle("on", Number(el.dataset.i) === i));
-    const go = () => { v.currentTime = c.t_start; v.play().catch(() => {}); };
-    if (!v.src.endsWith(c.video_url)) { v.src = c.video_url; v.addEventListener("loadedmetadata", go, { once: true }); } else go();
+    $$("#modal .clips li button").forEach((el) => el.setAttribute("aria-current", String(Number(el.dataset.i) === i)));
+    const start = () => { v.currentTime = c.t_start; v.play().catch(() => {}); };
+    if (!v.src.endsWith(c.video_url)) { v.src = c.video_url; v.addEventListener("loadedmetadata", start, { once: true }); } else start();
   };
   v.addEventListener("timeupdate", () => { if (v.currentTime >= clips[i].t_end) { if (i + 1 < clips.length) play(i + 1); else v.pause(); } });
-  document.querySelectorAll("#modal .clip").forEach((el) => el.addEventListener("click", () => play(Number(el.dataset.i))));
+  $$("#modal .clips li button").forEach((el) => el.addEventListener("click", () => play(Number(el.dataset.i))));
   play(0);
 }
 async function openClips(title, params) {
   const q = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== null && v !== undefined && v !== ""));
   clipPlayer(title, await api(`/api/teams/${TEAM}/clips?${q}`));
 }
-async function openPlaylist(id) {
-  const pl = await api(`/api/playlists/${id}`);
-  clipPlayer(pl.title, pl.clips, pl.note || "");
+async function openPlaylist(id) { const pl = await api(`/api/playlists/${id}`); clipPlayer(pl.title, pl.clips, pl.note || ""); }
+async function sessionFilm(id, title) {
+  const all = await api(`/api/teams/${TEAM}/clips?limit=200`);
+  clipPlayer(title, all.filter((c) => c.session_id === Number(id)));
 }
-function playTypeTable(r, clipParams) {
-  if (!r.play_types.length) return `<span class="muted">No play-type tags yet. Tag possessions in your film (pick & roll, spot-up, …) to see what works.</span>`;
-  const max = Math.max(...r.play_types.map((x) => x.ppp), 1.2);
-  return `<p class="small muted">${r.possessions} tagged possessions · overall <b>${r.overall_ppp?.toFixed(2)}</b> points per possession${clipParams ? " · click a row to watch it" : ""}</p>
-    <table><tr><th>Play type</th><th>Share</th><th>PPP</th><th></th><th>TO%</th></tr>
-    ${r.play_types.map((x) => `<tr class="${clipParams ? "click" : ""}" data-pt="${x.play_type}" ${clipParams ? `tabindex="0" aria-label="Watch ${esc(x.name)} possessions"` : ""}><td>${esc(x.name)}${x.play_type === r.best ? ` <span class="pill good">best</span>` : x.play_type === r.worst ? ` <span class="pill bad">worst</span>` : ""}</td>
-      <td>${pct(x.frequency)} <span class="small muted">n=${x.possessions}</span></td><td><b>${x.ppp.toFixed(2)}</b>${x.reliable ? "" : ` <span class="small muted">small sample</span>`}</td>
-      <td style="width:28%"><svg viewBox="0 0 100 8" preserveAspectRatio="none" style="width:100%;height:8px"><rect width="${(x.ppp / max) * 100}" height="8" rx="2" fill="${x.ppp >= r.overall_ppp ? "var(--good)" : "var(--bad)"}"/></svg></td>
-      <td class="small">${pct(x.turnover_rate)}</td></tr>`).join("")}</table>`;
+
+function playTypeTable(r, playable) {
+  if (!r.play_types.length) return `<p class="empty">No play types tagged yet. Tag possessions in the film room (pick and roll, spot-up, post-up) and this table shows what scores.</p>`;
+  const max = Math.max(...r.play_types.map((x) => x.ppp), 1.4);
+  return `<div class="tbl"><table><thead><tr><th>Play type</th><th class="r">Share</th><th class="r">Pts per poss.</th><th class="hide-narrow"></th><th class="r">Turnovers</th></tr></thead><tbody>
+    ${r.play_types.map((x) => `<tr ${playable ? `class="go" tabindex="0" data-pt="${x.play_type}" aria-label="Watch ${esc(x.name)} possessions"` : ""}>
+      <td>${esc(x.name)}${x.play_type === r.best ? `<span class="tag up">best</span>` : x.play_type === r.worst ? `<span class="tag down">worst</span>` : ""}${x.reliable ? "" : `<span class="sub">${x.possessions} possessions, small sample</span>`}</td>
+      <td class="r">${pct(x.frequency)}</td><td class="r"><b>${x.ppp.toFixed(2)}</b></td>
+      <td class="hide-narrow" style="width:26%"><div class="ppp"><div class="b"><i style="width:${(x.ppp / max) * 100}%;background:${x.ppp >= r.overall_ppp ? "var(--ink)" : "var(--line-strong)"}"></i><s style="left:${(r.overall_ppp / max) * 100}%"></s></div></div></td>
+      <td class="r">${pct(x.turnover_rate)}</td></tr>`).join("")}</tbody></table></div>
+    <p class="note" style="margin-top:8px">${nf.format(r.possessions)} tagged possessions, ${r.overall_ppp?.toFixed(2)} points per possession overall (the thin line).${playable ? " Select a row to watch those possessions." : ""}</p>`;
 }
 function bindPlayTypeRows(el, title, params) {
-  el.querySelectorAll("[data-pt]").forEach((row) => {
-    const go = () => openClips(`${title}: ${ptName(row.dataset.pt)}`, { ...params, play_type: row.dataset.pt });
-    row.addEventListener("click", go);
-    row.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } });
+  $$("[data-pt]", el).forEach((row) => {
+    const open = () => openClips(`${title}: ${ptName(row.dataset.pt)}`, { ...params, play_type: row.dataset.pt });
+    row.addEventListener("click", open);
+    row.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } });
   });
 }
-function md(text) { // tiny, safe Markdown subset for reports
+function md(text) { // small, escaped Markdown subset for written reports
   return text.split("\n").map((l) => {
-    let h = esc(l).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/(^|\s)_(.+?)_(\s|$)/g, "$1<i>$2</i>$3");
+    const h = esc(l).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/(^|\s)_(.+?)_(\s|$)/g, "$1<i>$2</i>$3");
     if (/^### /.test(l)) return `<h3>${h.slice(4)}</h3>`;
     if (/^## /.test(l)) return `<h2>${h.slice(3)}</h2>`;
     if (/^# /.test(l)) return `<h1>${h.slice(2)}</h1>`;
@@ -218,453 +221,543 @@ function md(text) { // tiny, safe Markdown subset for reports
   }).join("").replace(/(<li>.*?<\/li>)+/g, (m) => `<ul>${m}</ul>`);
 }
 
-// ---------------------------------------------------------------- player card (progress, message, film, edit)
-const SERIES_COLORS = ["#f28c28", "#3fb68b", "#4c9be8", "#e5534b", "#c9a227", "#9aa7b4"];
-function progressChart(h, dims) {
-  const W = 560, H = 190, P = 28, n = h.dates.length;
-  const x = (i) => P + (i * (W - 2 * P)) / Math.max(1, n - 1);
+// ---------------------------------------------------------------- charts
+// One skill row: grey band = 80% interval, tick = expected for the position, dot = current estimate.
+function skillRow(pid, name, k, s) {
+  const x = (v) => `${(v * 100).toFixed(1)}%`;
+  return `<button type="button" class="sk ${s.label}" data-sp="${pid}" data-dim="${k}" data-name="${esc(name)}"
+      title="${esc(s.name)}: ${pct(s.mean)}, likely between ${pct(s.low)} and ${pct(s.high)}. Expected for the position ${pct(s.baseline)}. ${s.evidence} weighted observations."
+      aria-label="${esc(s.name)} ${pct(s.mean)}, expected ${pct(s.baseline)}. Watch the clips.">
+    <span class="lab">${esc(SHORT[k])}</span>
+    <span class="rng"><span class="band" style="left:${x(s.low)};width:${x(Math.max(0.006, s.high - s.low))}"></span><span class="exp" style="left:${x(s.baseline)}"></span><span class="est" style="left:${x(s.mean)}"></span></span>
+    <span class="v">${pct(s.mean)}${s.trend ? (s.trend > 0 ? ` <span class="up" aria-label="improving">↑</span>` : ` <span class="down" aria-label="slipping">↓</span>`) : ""}</span></button>`;
+}
+const skillKey = `<div class="key"><span><i class="d"></i>estimate</span><span><i class="b"></i>likely range</span><span><i class="e"></i>expected for the position</span></div>`;
+
+// The shot chart: a half court in marker. Zone tint says above or below expectation; each zone plays its clips.
+function shotChart(card) {
+  const S = card.skills;
+  const tint = (s) => {
+    const g = (s.mean - s.baseline) / Math.max(0.05, s.baseline);
+    const a = Math.min(0.32, 0.06 + Math.abs(g) * 0.5);
+    return Math.abs(g) < 0.04 ? "transparent" : g > 0 ? `rgb(29 122 71 / ${a})` : `rgb(180 35 24 / ${a})`;
+  };
+  const zone = (k, shape, lx, ly, sy = 18) => `<g class="zone" tabindex="0" role="button" data-zone="${k}" aria-label="${esc(S[k].name)}: ${pct(S[k].mean)}, expected ${pct(S[k].baseline)}. Watch the shots.">
+      ${shape.replace("/>", ` class="hit" fill="${tint(S[k])}"/>`)}
+      <text class="zl" x="${lx}" y="${ly}" text-anchor="middle">${pct(S[k].mean)}</text>
+      <text class="zs" x="${lx}" y="${ly + sy}" text-anchor="middle">${esc(SHORT[k])}, exp. ${pct(S[k].baseline)}</text></g>`;
+  // 10 units per foot; basket at (250, 52.5); three-point arc 23.75 ft, corners at x = 30 and 470.
+  return `<svg class="court" viewBox="0 0 500 380" role="group" aria-label="Shot chart for ${esc(card.player.name)}">
+    <rect class="floor" x="0" y="0" width="500" height="380"/>
+    ${zone("three_point", `<path d="M0 0H30V142A237.5 237.5 0 0 0 470 142V0H500V380H0Z"/>`, 250, 336)}
+    ${zone("midrange", `<path d="M30 0V142A237.5 237.5 0 0 0 470 142V0H330V190H170V0Z"/>`, 100, 70)}
+    ${zone("rim_finishing", `<rect x="170" y="0" width="160" height="190"/>`, 250, 118)}
+    ${zone("free_throw", `<path d="M190 190A60 60 0 0 0 310 190Z"/>`, 250, 222, 40)}
+    <path class="ln" d="M1 1H499V379H1Z M170 0V190H330V0 M190 190A60 60 0 0 0 310 190 M30 0V142A237.5 237.5 0 0 0 470 142V0 M220 40H280"/>
+    <circle class="ln" cx="250" cy="52.5" r="7.5"/>
+  </svg>`;
+}
+function progressChart(h, dims, colors) {
+  const W = 560, H = 200, L = 34, R = 10, T = 12, B = 26, n = h.dates.length;
+  const x = (i) => L + (i * (W - L - R)) / Math.max(1, n - 1);
   const all = dims.flatMap((d) => h.series[d]);
   const lo = Math.max(0, Math.floor((Math.min(...all) - 0.05) * 10) / 10), hi = Math.min(1, Math.ceil((Math.max(...all) + 0.05) * 10) / 10);
-  const y = (v) => H - P - ((v - lo) / (hi - lo || 1)) * (H - 2 * P);
-  const grid = [lo, (lo + hi) / 2, hi].map((v) => `<line x1="${P}" x2="${W - P}" y1="${y(v)}" y2="${y(v)}" stroke="var(--line)"/><text x="2" y="${y(v) + 3}">${Math.round(v * 100)}%</text>`).join("");
-  const lines = dims.map((d, k) => `<polyline fill="none" stroke="${SERIES_COLORS[k % 6]}" stroke-width="2" points="${h.series[d].map((v, i) => `${x(i)},${y(v)}`).join(" ")}"/>
-    <circle cx="${x(n - 1)}" cy="${y(h.series[d][n - 1])}" r="3" fill="${SERIES_COLORS[k % 6]}"/>`).join("");
-  const ticks = [0, Math.floor((n - 1) / 2), n - 1].map((i) => `<text x="${x(i)}" y="${H - 8}" text-anchor="middle">${h.dates[i].slice(5)}</text>`).join("");
-  return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Skill estimates over the last ${n} weeks">${grid}${lines}${ticks}</svg>`;
+  const y = (v) => T + (1 - (v - lo) / (hi - lo || 1)) * (H - T - B);
+  const grid = [lo, (lo + hi) / 2, hi].map((v) => `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="var(--line)"/><text x="0" y="${y(v) + 4}">${Math.round(v * 100)}%</text>`).join("");
+  const lines = dims.map((d, k) => `<polyline fill="none" stroke="${colors[k]}" stroke-width="2" stroke-linejoin="round" points="${h.series[d].map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ")}"/>
+    <circle cx="${x(n - 1)}" cy="${y(h.series[d][n - 1])}" r="3.5" fill="${colors[k]}"/>`).join("");
+  const ticks = [0, Math.floor((n - 1) / 2), n - 1].map((i) => `<text x="${x(i)}" y="${H - 6}" text-anchor="middle">${day(h.dates[i])}</text>`).join("");
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Skill estimates week by week">${grid}${lines}${ticks}</svg>`;
 }
-async function playerModal(pid) {
-  const [card, h] = await Promise.all([api(`/api/players/${pid}`), api(`/api/players/${pid}/history`)]);
-  const p = card.player;
-  let dims = [...new Set([...card.focus, ...card.strengths.map((s) => s.dimension), h.most_improved])].slice(0, 4);
-  const ctx = `Player card: ${p.name} (#${p.number ?? "?"}, ${p.position})`;
-  const draw = () => {
-    $("#pmChart").innerHTML = progressChart(h, dims);
-    $("#pmLegend").innerHTML = Object.keys(h.series).map((d) => { const k = dims.indexOf(d);
-      return `<label><input type="checkbox" data-dim="${d}" ${k >= 0 ? "checked" : ""}><i style="background:${k >= 0 ? SERIES_COLORS[k % 6] : "var(--line)"}"></i>${esc(META.dimensions[d].name)} <span class="muted tnum">${h.change[d] >= 0 ? "+" : ""}${Math.round(h.change[d] * 100)}</span></label>`; }).join("");
-    $("#pmLegend").querySelectorAll("[data-dim]").forEach((c) => c.addEventListener("change", () => {
-      dims = c.checked ? [...dims, c.dataset.dim].slice(-6) : dims.filter((d) => d !== c.dataset.dim);
-      if (!dims.length) dims = [c.dataset.dim];
-      draw();
-    }));
-  };
-  modal(`<h2>#${esc(p.number ?? "")} ${esc(p.name)} <span class="pill">${esc(p.position)}</span> <span class="muted small tnum">${card.events} events</span></h2>
-    <div class="row-actions">
-      <button class="ghost" id="pmFilm">${ICON.film} Film</button>
-      <button class="ghost" id="pmMsg">${ICON.send} Message to player</button>
-      ${askBtn(`How is ${p.name} doing, and what should we focus on with him?`, ctx)}
-      <button class="ghost" id="pmEdit">Edit</button>
+const SERIES = ["#14171c", "#b8430f", "#2f6f9f", "#1d7a47", "#8a6d1f", "#7a4a8a"];
+
+// ---------------------------------------------------------------- first run (no team yet)
+function firstRun() {
+  $("#main").innerHTML = `<div class="first">
+    <div>
+      <div class="wordmark"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9.5" fill="#b8430f"/><path d="M2.5 12h19M12 2.5v19M5.2 5.4c3.3 3.3 3.3 9.9 0 13.2M18.8 5.4c-3.3 3.3-3.3 9.9 0 13.2" fill="none" stroke="#fff8f2" stroke-width="1.3"/></svg>HoopLab</div>
+      <h1>Know every player before you draw up the week.</h1>
+      <p class="lede">Bring your roster and film. HoopLab learns each player and plans practice with you.</p>
+      <form id="startForm"><label class="sr-only" for="startName">Team name</label><input id="startName" name="name" required autocomplete="off" placeholder="Your team's name"><button class="btn">Start</button></form>
+      <p class="or">Or <button type="button" class="btn quiet" id="startDemo">open a demo team</button> with ten weeks of games already tagged.</p>
     </div>
-    <div class="grid2" style="margin-top:14px">
-      <div><h3>Progress <span class="muted small">skill estimate week by week · number = change over the last ${h.change_weeks} weeks</span></h3>
-        <div id="pmChart"></div><div class="chart-legend" id="pmLegend"></div></div>
-      <div><h3>Now</h3><div class="small muted">Strengths</div>${pills(card.strengths, "good")}
-        <div class="small muted" style="margin-top:6px">Needs work</div>${pills(card.weaknesses, "bad")}
-        <div class="small muted" style="margin-top:6px">Focus this week</div><div>${card.focus.map((d) => esc(META.dimensions[d].name)).join(", ") || "n/a"}</div>
-        ${card.recent_trends.length ? `<div class="small muted" style="margin-top:6px">Significant trends</div>${card.recent_trends.map((t) => `<div class="tnum">${esc(t.name)}: ${pct(t.before)} → <b class="${t.trend > 0 ? "edge-pos" : "edge-neg"}">${pct(t.recent)}</b></div>`).join("")}` : ""}
-        <div class="small muted" style="margin-top:6px">Homework</div>${card.homework.filter((x) => x.status === "assigned").map((x) => `<div>${esc(DRILLS[x.drill_id]?.name ?? x.drill_id)} <span class="muted small">due ${esc(x.due)}</span></div>`).join("") || `<span class="muted small">None open</span>`}
-        <div id="pmOut" style="margin-top:12px"></div></div>
-    </div>`);
-  draw(); bindAsk($("#modal"));
-  $("#pmFilm").addEventListener("click", () => openClips(`${p.name}: all film`, { player_id: pid }));
-  $("#pmMsg").addEventListener("click", async () => {
-    $("#pmOut").innerHTML = `<p class="muted" aria-live="polite">Writing ${esc(p.name.split(" ")[0])}'s message…</p>`;
-    const m = await api(`/api/players/${pid}/message`);
-    $("#pmOut").innerHTML = `<h3>Message to ${esc(p.name.split(" ")[0])} <span class="pill">${esc(m.source)}</span></h3><div class="msg-box" dir="auto">${esc(m.text)}</div>
-      <div class="row-actions"><button class="ghost" id="pmCopy">Copy</button><a class="btn ghost-link" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(m.text)}">Send on WhatsApp</a></div>`;
-    $("#pmCopy").addEventListener("click", async () => { await navigator.clipboard.writeText(m.text); toast("Copied"); });
-  });
-  $("#pmEdit").addEventListener("click", () => {
-    $("#pmOut").innerHTML = `<form class="form" id="pmForm"><label>Name<input name="name" value="${esc(p.name)}" required></label>
-      <label>Number<input name="number" type="number" min="0" max="99" value="${esc(p.number ?? "")}" style="width:80px"></label>
-      <label>Position<select name="position">${META.positions.map((x) => `<option ${x === p.position ? "selected" : ""}>${x}</option>`).join("")}</select></label>
-      <button>Save</button><button type="button" class="ghost danger" id="pmDel">Remove player</button></form>`;
-    $("#pmForm").addEventListener("submit", async (e) => {
-      e.preventDefault(); const f = Object.fromEntries(new FormData(e.target)); f.number = f.number ? Number(f.number) : null;
-      await api(`/api/players/${pid}`, { method: "PATCH", json: f }); toast("Saved"); closeModal(); RENDER[current()]();
-    });
-    $("#pmDel").addEventListener("click", async (e) => {
-      const b = e.currentTarget;
-      if (!b.dataset.armed) { b.dataset.armed = "1"; b.textContent = `Remove ${p.name} and all their data`; b.insertAdjacentHTML("afterend", `<span class="small muted" role="alert">This cannot be undone. Click again to confirm.</span>`); return; }
-      await api(`/api/players/${pid}`, { method: "DELETE" }); toast("Player removed"); closeModal(); loadTeams(TEAM);
-    });
+    <figure class="board" aria-hidden="true" style="margin:0">
+      <svg viewBox="0 0 520 380">
+        <rect class="floor" x="1" y="1" width="518" height="378" rx="6"/>
+        <path class="ln" d="M20 30H500 M180 30V230H340V30 M200 230A60 60 0 0 0 320 230 M40 30V150A240 240 0 0 0 480 150V30 M230 62H290"/>
+        <circle class="ln" cx="260" cy="76" r="8"/>
+        <path class="run draw" d="M262 300C300 296 330 280 352 250" marker-end="url(#ah)"/>
+        <path class="pass" d="M168 262C200 290 230 300 258 302"/>
+        <path class="run draw d2" d="M120 168C150 140 190 128 228 112" marker-end="url(#ah)"/>
+        <path class="screen" d="M282 318L304 334"/>
+        <defs><marker id="ah" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10" fill="none" stroke="#b8430f" stroke-width="2"/></marker></defs>
+        <circle class="o" cx="260" cy="342" r="15"/><text class="lbl" x="260" y="348" text-anchor="middle">1</text>
+        <circle class="o" cx="296" cy="326" r="15"/><text class="lbl" x="296" y="332" text-anchor="middle">5</text>
+        <circle class="o" cx="150" cy="250" r="15"/><text class="lbl" x="150" y="256" text-anchor="middle">2</text>
+        <circle class="o" cx="420" cy="190" r="15"/><text class="lbl" x="420" y="196" text-anchor="middle">3</text>
+        <circle class="o" cx="104" cy="182" r="15"/><text class="lbl" x="104" y="188" text-anchor="middle">4</text>
+        <path class="x" d="M250 296l14 14M264 296l-14 14 M300 290l12 12M312 290l-12 12 M168 214l12 12M180 214l-12 12 M392 172l12 12M404 172l-12 12 M196 138l12 12M208 138l-12 12"/>
+      </svg>
+      <figcaption>High pick and roll, weak-side flare. Every possession you tag becomes a clip you can replay from the numbers.</figcaption>
+    </figure></div>`;
+  $("#startDemo").addEventListener("click", loadDemo);
+  $("#startForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const t = await api("/api/teams", { method: "POST", json: { name: e.target.name.value } });
+    VIEW = "roster"; loadTeams(t.id);
   });
 }
 
-// ---------------------------------------------------------------- tabs
+// ---------------------------------------------------------------- views
 let CHAT_ID = null;
 const SUGGESTIONS = [
-  "What should we work on this week, and who needs what?",
+  "Catch me up before practice: what changed since the last game?",
   "We play Maccabi North on Thursday. Plan tomorrow: 75 minutes, 9 players, one hoop, nothing too intense.",
-  "Today Noam hit 4 of 6 threes and lost the ball twice under pressure; Daniel was late on help 3 times.",
+  "Today Noam hit 4 of 6 threes and lost the ball twice under pressure. Daniel was late on help three times.",
   "תכין שיעורי בית לכל השחקנים לשבוע הקרוב",
-  "Catch me up: what should I know before practice?",
-  "How did we play in the last game? Who surprised you?",
   "Self-scout: which play types work for us, and what should we run more?",
-  "I hate conditioning drills without a ball. Remember that.",
 ];
-const RENDER = {
-  async assistant() {
-    const el = $("#tab-assistant");
-    const health = await api("/api/health");
-    el.innerHTML = `<div class="card chat">
-      <h3>Assistant coach <span class="pill">${esc(health.model)}</span> ${health.ai ? `<span class="pill good">online</span>` : `<span class="pill bad">AI not configured</span>`}
-        <button class="ghost" id="newChat" style="float:right">New conversation</button></h3>
-      <p class="small muted">Ask about the team, plan practices, report what happened, scout opponents. The assistant uses HoopLab's model and tools, and every number it gives comes from your data.</p>
-      ${health.ai ? "" : `<p class="small">Set <code>ANTHROPIC_API_KEY</code> on the server to enable the assistant, notes understanding and film AI. Everything else works without it.</p>`}
-      <div class="suggest">${SUGGESTIONS.map((q) => `<button class="ghost" data-q="${esc(q)}">${esc(q)}</button>`).join("")}</div>
-      <div class="chat-log" id="chatLog"></div>
-      <form class="chat-in" id="chatForm"><textarea name="m" id="chatText" dir="auto" placeholder="Message your assistant coach… (Hebrew or English)"></textarea>${micButton("#chatText")}<button>Send</button></form>
-    </div>`;
-    const log = $("#chatLog");
-    const add = (role, text, actions = []) => {
-      const d = document.createElement("div");
-      d.className = `msg ${role}`; d.dir = "auto"; d.textContent = text;
-      if (actions.length) {
-        const a = document.createElement("div"); a.className = "acts";
-        a.innerHTML = actions.map((x) => x.playlist_id ? `<button class="pill info num" data-pl="${x.playlist_id}">${ICON.film} Watch playlist</button>` : `<span class="pill info">${esc(x.kind.replace("_", " "))}${x.stored ? ` ${x.stored}` : ""}${x.count ? ` ${x.count}` : ""}</span>`).join("");
-        a.querySelectorAll("[data-pl]").forEach((b) => b.addEventListener("click", () => openPlaylist(b.dataset.pl)));
-        d.appendChild(a);
-      }
-      log.appendChild(d); log.scrollTop = log.scrollHeight; return d;
-    };
-    if (CHAT_ID) (await api(`/api/teams/${TEAM}/chats/${CHAT_ID}`)).forEach((m) => add(m.role, m.text));
-    const send = async (text, context = null) => {
-      if (!text.trim()) return;
-      const u = add("user", text);
-      if (context) { const c = document.createElement("div"); c.className = "small muted"; c.textContent = `about: ${context}`; u.appendChild(c); }
-      const wait = add("assistant", "Thinking…"); wait.classList.add("typing");
-      try {
-        const r = await api(`/api/teams/${TEAM}/chat`, { method: "POST", json: { message: text, chat_id: CHAT_ID, context } });
-        CHAT_ID = r.chat_id; wait.remove(); add("assistant", r.reply || "(no reply)", r.actions);
-      } catch (e) { wait.remove(); add("assistant", `Error: ${e.message}`); }
-    };
-    $("#chatForm").addEventListener("submit", (e) => { e.preventDefault(); const t = e.target.m.value; e.target.m.value = ""; send(t); });
-    $("#chatForm textarea").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("#chatForm").requestSubmit(); } });
-    el.querySelectorAll("[data-q]").forEach((b) => b.addEventListener("click", () => send(b.dataset.q)));
-    $("#newChat").addEventListener("click", () => { CHAT_ID = null; RENDER.assistant(); });
-    bindMic(el);
-    if (PENDING_ASK) { const p = PENDING_ASK; PENDING_ASK = null; send(p.question, p.context); }
-  },
 
-  async team() {
-    const el = $("#tab-team");
-    el.innerHTML = `<p class="muted">Analysing…</p>`;
+// One row per player, best two edges each, at most four players.
+function feature(list) {
+  const by = new Map();
+  for (const x of list) {
+    if (!by.has(x.player_id)) by.set(x.player_id, { id: x.player_id, player: x.player, items: [] });
+    const g = by.get(x.player_id); if (g.items.length < 2) g.items.push(x);
+  }
+  return [...by.values()].slice(0, 4);
+}
+
+const RENDER = {
+  async today() {
     const [s, brief, pt, inbox] = await Promise.all([api(`/api/teams/${TEAM}/snapshot`), api(`/api/teams/${TEAM}/briefing`),
       api(`/api/teams/${TEAM}/play-types`), api(`/api/teams/${TEAM}/inbox`)]);
-    el.innerHTML = `
-      <div class="kpis">
-        <div class="kpi"><span class="muted small">Players</span><b>${s.players.length}</b></div>
-        <div class="kpi"><span class="muted small">Events learned from</span><b>${s.data_coverage.events.toLocaleString()}</b></div>
-        <div class="kpi"><span class="muted small">Top priority</span><b style="font-size:15px">${esc(s.priorities[0]?.name ?? "–")}</b></div>
-        <div class="kpi"><span class="muted small">Significant trends</span><b>${s.trends.length}</b></div>
-      </div>
-      <div class="grid2">
-        <div class="card"><h3>Coach's inbox <span class="pill info">AI</span> <span class="muted small">debriefs after every game and practice, trends, overdue homework</span></h3>
-          <div class="inbox-scroll">${inbox.map((i) => `<div class="inbox-item ${esc(i.kind)}"><b dir="auto">${esc(i.title)}</b> ${i.source && i.source !== "model" ? `<span class="pill">${esc(i.source)}</span>` : ""}
-            <div class="body" dir="auto">${esc(i.body)}</div>
-            <div class="row-actions">${i.ref?.session_id ? `<button class="ghost ask" data-watch-s="${i.ref.session_id}">${ICON.film} Film</button>` : ""}${askBtn("What should we do about this?", `${i.title}: ${i.body}`.slice(0, 1500))}</div></div>`).join("") || `<span class="muted">Nothing new. Debriefs appear here after each game or practice you add.</span>`}</div></div>
-        <div class="card"><h3>Coach briefing <span class="pill">${esc(brief.source)}</span></h3><div class="briefing" dir="auto">${esc(brief.text)}</div></div>
-        <div class="card"><h3>Strengths to exploit</h3>
-          <table><tr><th>Player</th><th>Skill</th><th>Level</th><th>Expected</th></tr>
-          ${s.exploit.map((x) => `<tr><td>${esc(x.player)}</td><td>${esc(x.name)}</td><td class="edge-pos">${pct(x.mean)}</td><td class="muted">${pct(x.baseline)}</td></tr>`).join("") || `<tr><td colspan="4" class="muted">Not enough data yet</td></tr>`}
-          </table></div>
-        <div class="card"><h3>Team priorities (what practice should fix)</h3>
-          ${s.priorities.map((p, i) => `<div>${i + 1}. ${esc(p.name)} <span class="muted small">need ${p.need}</span></div>`).join("")}
-          <h3 style="margin-top:14px">Trends (statistically significant)</h3>
-          ${s.trends.map((t) => `<div>${esc(t.player)} · ${esc(t.name)}: ${pct(t.before)} → <b class="${t.trend > 0 ? "edge-pos" : "edge-neg"}">${pct(t.recent)}</b> <span class="muted small">z=${t.z}</span></div>`).join("") || `<span class="muted">No significant changes in the last 3 weeks.</span>`}
-        </div>
-        <div class="card"><h3>Team profile vs. expected for your positions</h3>
-          <table><tr><th>Skill</th><th>Team</th><th>Expected</th><th>Gap</th></tr>
-          ${Object.values(s.team_dimensions).map((d) => `<tr><td>${esc(d.name)}</td><td>${pct(d.mean)}</td><td class="muted">${pct(d.baseline)}</td><td class="${d.gap >= 0 ? "edge-pos" : "edge-neg"}">${d.gap >= 0 ? "+" : ""}${Math.round(d.gap * 100)}%</td></tr>`).join("")}
-          </table></div>
-        <div class="card" id="ptCard"><h3>Self-scout: points per possession by play type</h3>${playTypeTable(pt, true)}</div>
-      </div>
-      <h2 style="margin-top:22px">Players at a glance</h2>
-      <div class="grid">${s.players.map((c) => `
-        <div class="card click" data-pid="${c.player.id}" tabindex="0" role="button" aria-label="Open ${esc(c.player.name)}">
-          <h3>#${esc(c.player.number ?? "")} ${esc(c.player.name)} <span class="pill">${esc(c.player.position)}</span></h3>
-          <div class="small muted">Strengths</div>${pills(c.strengths, "good")}
-          <div class="small muted" style="margin-top:6px">Needs work</div>${pills(c.weaknesses, "bad")}
-          <div class="small muted" style="margin-top:6px">Focus this week: ${c.focus.map((d) => esc(META.dimensions[d].name)).join(", ") || "–"}</div>
-        </div>`).join("")}</div>`;
-    el.querySelectorAll("[data-pid]").forEach((c) => {
-      c.addEventListener("click", () => playerModal(Number(c.dataset.pid)));
-      c.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); playerModal(Number(c.dataset.pid)); } });
+    const top = s.priorities[0];
+    const maxNeed = Math.max(...s.priorities.map((p) => p.need), 0.001);
+    const feed = inbox.map((i, n) => {
+      const kind = { debrief: "Debrief", trend: "Trend", data: "Needs data", homework: "Homework" }[i.kind] || i.kind;
+      return `<details ${n === 0 ? "open" : ""}><summary><span class="kind ${esc(i.kind)}">${kind}${i.at ? `<br>${day(i.at)}` : ""}</span><span class="t" dir="auto">${esc(i.title.replace(/^(debrief|trend)\s*:\s*/i, ""))}</span></summary>
+        <div class="body" dir="auto">${esc(i.body).split("\n").filter(Boolean).map((l) => `<p>${l}</p>`).join("")}
+          ${i.kind === "debrief" ? `<p class="by">${writtenBy(i.source)}</p>` : ""}
+          <div class="actions">${i.ref?.session_id ? `<button type="button" class="btn line small" data-watch="${i.ref.session_id}" data-title="${esc(i.title)}">${ICON.film}Watch the film</button>` : ""}
+          ${askBtn("Ask what to do about it", "What should we do about this?", `${i.title}: ${i.body}`.slice(0, 1500))}</div></div></details>`;
+    }).join("");
+    const dimRows = Object.entries(s.team_dimensions).map(([k, d]) => {
+      const lo = Math.min(d.mean, d.baseline), hi = Math.max(d.mean, d.baseline), c = d.gap >= 0 ? "var(--good)" : "var(--bad)";
+      return `<div class="lab" title="${esc(d.name)}">${esc(SHORT[k])}</div><div class="track"><span class="gap" style="left:${lo * 100}%;width:${(hi - lo) * 100}%;background:${c};opacity:.35"></span><span class="exp" style="left:${d.baseline * 100}%"></span><span class="dot" style="left:${d.mean * 100}%;background:${c}"></span></div><div class="val ${d.gap >= 0 ? "up" : "down"}">${signed(d.gap)}${Math.round(d.gap * 100) ? "%" : ""}</div>`;
+    }).join("");
+    $("#main").innerHTML = `<div class="view">
+      <header class="page-head"><h1>${esc(s.team.name)}</h1>
+        <p class="lede">${top ? `The biggest gap this week is <b>${esc(top.name.toLowerCase())}</b>. ` : ""}${s.players.length} players and ${nf.format(s.data_coverage.events)} tagged events so far${s.trends.length ? `. ${s.trends.length === 1 ? "One clear trend" : `${s.trends.length} clear trends`} in the last three weeks` : ""}.</p></header>
+      <div class="split">
+        <section aria-labelledby="hFeed"><h2 id="hFeed">Debriefs and alerts</h2>
+          <div class="feed">${feed || `<p class="empty">Nothing new. A debrief lands here after every game or practice you add.</p>`}</div></section>
+        <aside class="stack">
+          <section aria-labelledby="hNeed"><h2 id="hNeed">Practice priorities</h2>
+            <ol class="needs">${s.priorities.map((p) => `<li><span>${esc(p.name)}</span><span class="bar"><i style="width:${(p.need / maxNeed) * 100}%"></i></span></li>`).join("")}</ol></section>
+          <section aria-labelledby="hUse"><h2 id="hUse">Players to feature</h2>
+            <ul class="plain">${feature(s.exploit).map((g) => `<li><button type="button" class="row" data-player="${g.id}">${esc(g.player)}<span class="sub">${g.items.map((x) => `${esc(x.name)} ${pct(x.mean)}, position expects ${pct(x.baseline)}`).join("; ")}</span></button></li>`).join("") || `<li class="soft">Not enough data yet.</li>`}</ul></section>
+          <details class="brief"><summary>Practice briefing</summary><div class="text" dir="auto">${esc(brief.text)}</div><p class="note" style="margin-top:8px">${writtenBy(brief.source)}</p></details>
+        </aside></div>
+      <section aria-labelledby="hRoster"><h2 id="hRoster">Roster</h2>
+        <div class="tbl"><table><thead><tr><th>#</th><th>Player</th><th class="hide-narrow">Pos.</th><th class="hide-narrow">Best right now</th><th>Work on</th><th class="r hide-narrow">Events</th></tr></thead><tbody>
+        ${s.players.map((c) => `<tr class="go" tabindex="0" data-player="${c.player.id}" aria-label="Open ${esc(c.player.name)}"><td class="jersey">${esc(c.player.number ?? "")}</td><td class="nm">${esc(c.player.name)}</td><td class="hide-narrow">${esc(c.player.position)}</td>
+          <td class="hide-narrow">${c.strengths.slice(0, 2).map((x) => `${esc(SHORT[x.dimension])} <span class="soft">${pct(x.mean)}</span>`).join(", ") || `<span class="soft">nothing confirmed yet</span>`}</td>
+          <td>${c.focus.map((d) => esc(short(d))).join(", ") || `<span class="soft">n/a</span>`}</td><td class="r soft hide-narrow">${nf.format(c.events)}</td></tr>`).join("")}</tbody></table></div></section>
+      <div class="split even">
+        <section aria-labelledby="hDims"><h2 id="hDims">Team against positional expectation</h2>
+          <div class="dots">${dimRows}</div><div class="key"><span><i class="d"></i>team average</span><span><i class="e"></i>expected for our positions</span></div></section>
+        <section id="ptSec" aria-labelledby="hPt"><h2 id="hPt">Our play types</h2>${playTypeTable(pt, true)}</section>
+      </div></div>`;
+    const main = $("#main");
+    $$("[data-player]", main).forEach((r) => {
+      const open = () => go("roster", { player: Number(r.dataset.player) });
+      r.addEventListener("click", open);
+      if (r.tagName === "TR") r.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } });
     });
-    bindPlayTypeRows($("#ptCard"), "Our team", {});
-    bindAsk(el);
-    el.querySelectorAll("[data-watch-s]").forEach((b) => b.addEventListener("click", async () => {
-      const all = await api(`/api/teams/${TEAM}/clips?limit=200`);
-      clipPlayer("Session film", all.filter((c) => c.session_id === Number(b.dataset.watchS)));
-    }));
+    $$("[data-watch]", main).forEach((b) => b.addEventListener("click", () => sessionFilm(b.dataset.watch, b.dataset.title)));
+    bindPlayTypeRows($("#ptSec"), "Our team", {});
+    bindAsk(main);
   },
 
-  async players(focusId) {
-    const el = $("#tab-players");
+  async assistant() {
+    const health = await api("/api/health");
+    $("#main").innerHTML = `<div class="chat">
+      <header class="page-head"><h1>Assistant</h1>
+        <p class="lede">Claude, with your team's numbers, film tags, drills and homework at hand. It can plan, log what you saw, and write to players. Hebrew or English.</p>
+        ${health.ai ? "" : `<p class="offline">Claude is not connected on this server. Set <code>ANTHROPIC_API_KEY</code> to talk to it; every other page works without it.</p>`}</header>
+      <div class="log" id="log" aria-live="polite"></div>
+      <div class="dock"><form id="chatForm"><label class="sr-only" for="chatText">Message</label><textarea id="chatText" name="m" dir="auto" rows="1" placeholder="Ask about the team, or tell it what happened today"></textarea>${micButton("#chatText")}<button class="btn" aria-label="Send">${ICON.send}</button></form>
+        <p class="note" style="margin-top:6px">${health.ai ? "Claude Opus 5.5." : ""} <button type="button" class="btn quiet small" id="newChat">Start a new conversation</button></p></div></div>`;
+    const log = $("#log");
+    const add = (role, text, extra = {}) => {
+      const d = document.createElement("div");
+      d.className = `m ${role}`; d.dir = "auto";
+      if (role === "assistant" && !extra.wait) d.innerHTML = `<span class="who">HoopLab</span>`;
+      d.appendChild(document.createTextNode(text));
+      if (extra.about) d.insertAdjacentHTML("beforeend", `<span class="about">About: ${esc(extra.about.slice(0, 140))}${extra.about.length > 140 ? "…" : ""}</span>`);
+      if (extra.actions?.length) {
+        const a = document.createElement("div"); a.className = "acts";
+        a.innerHTML = extra.actions.map((x) => x.playlist_id ? `<button type="button" class="btn line small" data-pl="${x.playlist_id}">${ICON.film}Watch the playlist</button>`
+          : `<span class="did">${esc(x.kind.replace(/_/g, " "))}${x.stored ? `: ${x.stored} stored` : ""}${x.count ? `: ${x.count}` : ""}</span>`).join("");
+        $$("[data-pl]", a).forEach((b) => b.addEventListener("click", () => openPlaylist(b.dataset.pl)));
+        d.appendChild(a);
+      }
+      log.querySelector(".try-wrap")?.remove();
+      log.appendChild(d); d.scrollIntoView({ block: "nearest" }); return d;
+    };
+    if (CHAT_ID) (await api(`/api/teams/${TEAM}/chats/${CHAT_ID}`)).forEach((m) => add(m.role, m.text));
+    else log.innerHTML = `<div class="try-wrap"><p class="note">Things coaches ask it</p><ul class="try">${SUGGESTIONS.map((q) => `<li><button type="button" dir="auto" data-q="${esc(q)}">${esc(q)}</button></li>`).join("")}</ul></div>`;
+    const send = async (text, context = null) => {
+      if (!text.trim()) return;
+      add("user", text, { about: context });
+      const wait = add("assistant", "Reading the numbers…", { wait: true }); wait.classList.add("wait");
+      try {
+        const r = await api(`/api/teams/${TEAM}/chat`, { method: "POST", json: { message: text, chat_id: CHAT_ID, context } });
+        CHAT_ID = r.chat_id; wait.remove(); add("assistant", r.reply || "(no reply)", { actions: r.actions });
+      } catch (e) { wait.remove(); add("assistant", `That did not go through: ${e.message}`); }
+    };
+    const ta = $("#chatText");
+    $("#chatForm").addEventListener("submit", (e) => { e.preventDefault(); const t = ta.value; ta.value = ""; send(t); });
+    ta.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("#chatForm").requestSubmit(); } });
+    $$("[data-q]", log).forEach((b) => b.addEventListener("click", () => send(b.dataset.q)));
+    $("#newChat").addEventListener("click", () => { CHAT_ID = null; go("assistant"); });
+    bindMic($("#main"));
+    if (PENDING_ASK) { const p = PENDING_ASK; PENDING_ASK = null; send(p.question, p.context); } else ta.focus({ preventScroll: true });
+  },
+
+  async roster() {
     const s = await api(`/api/teams/${TEAM}/snapshot`);
-    el.innerHTML = `
-      <div class="card" style="margin-bottom:16px"><h3>Add player</h3>
-        <form class="form" id="addPlayer">
-          <label>Name<input name="name" required></label>
-          <label>Number<input name="number" type="number" min="0" max="99" style="width:80px"></label>
-          <label>Position<select name="position">${META.positions.map((p) => `<option>${p}</option>`).join("")}</select></label>
-          <label>Height (cm)<input name="height_cm" type="number" style="width:90px"></label>
-          <button>Add</button>
-        </form>
-        <form class="form" id="importRoster" style="margin:0"><label>Or import a roster (CSV: name, number, position, height_cm)<input type="file" name="file" accept=".csv"></label><button class="ghost">Import</button></form></div>
-      ${legend}<p class="small muted">Click a skill to watch the possessions behind it.</p>
-      <div class="grid">${s.players.map((c) => `
-        <div class="card" id="p-${c.player.id}">
-          <h3><button class="linklike" data-open="${c.player.id}">#${esc(c.player.number ?? "")} ${esc(c.player.name)}</button> <span class="pill">${esc(c.player.position)}</span> <span class="muted small tnum">${c.events} events</span>
-            <button class="ghost ask" data-film="${c.player.id}" data-name="${esc(c.player.name)}" style="float:right">${ICON.film} Film</button></h3>
-          ${Object.entries(c.skills).map(([k, sk]) => `<button class="skill-row" data-sp="${c.player.id}" data-dim="${k}" data-name="${esc(c.player.name)}" aria-label="Watch ${esc(c.player.name)}: ${esc(sk.name)}">${skillBar(sk)}</button>`).join("")}
-          <div class="small muted" style="margin-top:8px">Exploit: ${c.strengths.map((x) => esc(x.name)).join(", ") || "–"}</div>
-          <div class="small muted">Work on: ${c.focus.map((d) => esc(META.dimensions[d].name)).join(", ") || "–"}</div>
-        </div>`).join("")}</div>`;
-    el.querySelectorAll("[data-open]").forEach((b) => b.addEventListener("click", () => playerModal(Number(b.dataset.open))));
-    $("#importRoster").addEventListener("submit", async (e) => {
-      e.preventDefault(); const fd = new FormData(e.target);
-      if (!fd.get("file")?.name) return toast("Choose a CSV file");
-      const r = await api(`/api/teams/${TEAM}/players.csv`, { method: "POST", body: fd });
-      toast(`${r.added} added, ${r.updated} updated`); RENDER.players(); loadTeams(TEAM);
-    });
-    el.querySelectorAll("[data-film]").forEach((b) => b.addEventListener("click", () => openClips(`${b.dataset.name}: all film`, { player_id: b.dataset.film })));
-    el.querySelectorAll("[data-sp]").forEach((r) => r.addEventListener("click", () =>
-      openClips(`${r.dataset.name}: ${META.dimensions[r.dataset.dim].name}`, { player_id: r.dataset.sp, dimension: r.dataset.dim })));
+    const cards = s.players;
+    if (!cards.find((c) => c.player.id === PLAYER)) PLAYER = cards[0]?.player.id ?? null;
+    $("#main").innerHTML = `<div class="split list">
+      <nav aria-label="Players">
+        <ul class="roster">${cards.map((c) => `<li><button type="button" data-pid="${c.player.id}" ${c.player.id === PLAYER ? `aria-current="true"` : ""}><span class="n">${esc(c.player.number ?? "")}</span><span class="nm">${esc(c.player.name)}</span><span class="pos">${esc(c.player.position)}</span></button></li>`).join("")}</ul>
+        <details class="add" ${cards.length ? "" : "open"}><summary>Add a player</summary>
+          <form class="form-col" id="addPlayer"><label class="field">Name<input name="name" required autocomplete="off"></label>
+            <div class="three"><label class="field">Number<input name="number" type="number" min="0" max="99"></label><label class="field">Position<select name="position">${META.positions.map((p) => `<option>${p}</option>`).join("")}</select></label><label class="field">Height<input name="height_cm" type="number" placeholder="cm"></label></div>
+            <div><button class="btn small">Add player</button></div></form></details>
+        <details class="add"><summary>Import a roster file</summary>
+          <form class="form-col" id="importRoster"><p class="note">CSV with columns name, number, position, height_cm. Existing numbers are updated.</p><input type="file" name="file" accept=".csv"><div><button class="btn line small">Import</button></div></form></details>
+      </nav>
+      <div id="sheet">${cards.length ? `<p class="loading">Loading…</p>` : `<p class="empty"><b>No players yet.</b> Add your first player on the left, or import the roster file you already keep.</p>`}</div></div>`;
+    $$("[data-pid]").forEach((b) => b.addEventListener("click", () => {
+      PLAYER = Number(b.dataset.pid);
+      $$("[data-pid]").forEach((x) => (x === b ? x.setAttribute("aria-current", "true") : x.removeAttribute("aria-current")));
+      playerSheet(cards.find((c) => c.player.id === PLAYER));
+    }));
     $("#addPlayer").addEventListener("submit", async (e) => {
       e.preventDefault();
       const f = Object.fromEntries(new FormData(e.target));
       for (const k of ["number", "height_cm"]) f[k] = f[k] ? Number(f[k]) : null;
-      await api(`/api/teams/${TEAM}/players`, { method: "POST", json: f });
-      toast("Player added"); RENDER.players(); loadTeams(TEAM);
+      const p = await api(`/api/teams/${TEAM}/players`, { method: "POST", json: f });
+      toast(`${f.name} added`); PLAYER = p.id; loadTeams(TEAM);
     });
-    if (focusId) playerModal(focusId);
+    $("#importRoster").addEventListener("submit", async (e) => {
+      e.preventDefault(); const fd = new FormData(e.target);
+      if (!fd.get("file")?.name) return toast("Choose a CSV file first");
+      const r = await api(`/api/teams/${TEAM}/players.csv`, { method: "POST", body: fd });
+      toast(`${r.added} added, ${r.updated} updated`); loadTeams(TEAM);
+    });
+    if (PLAYER) playerSheet(cards.find((c) => c.player.id === PLAYER));
   },
 
   async practice() {
-    const el = $("#tab-practice");
     const opps = await api(`/api/teams/${TEAM}/opponents`);
-    el.innerHTML = `
-      <div class="card" style="margin-bottom:16px"><h3>Build a practice</h3>
-      <form class="form" id="planForm">
-        <label>Minutes<input name="minutes" type="number" value="90" min="15" max="240" style="width:80px"></label>
-        <label>Players available<input name="players" type="number" value="10" min="1" max="30" style="width:80px"></label>
-        <label>Hoops<input name="hoops" type="number" value="2" min="0" max="12" style="width:70px"></label>
-        <label>Max intensity<select name="max_intensity"><option>high</option><option>medium</option><option>low</option></select></label>
-        <label>Court<select name="court"><option value="full">Full court</option><option value="half">Half court only</option></select></label>
-        <label>Preparing for<select name="opponent_id"><option value="">–</option>${opps.map((o) => `<option value="${o.id}">${esc(o.name)}</option>`).join("")}</select></label>
-        <label>Extra focus<select name="focus" multiple size="3">${Object.entries(META.dimensions).map(([k, v]) => `<option value="${k}">${esc(v.name)}</option>`).join("")}</select></label>
-        <button>Generate plan</button>
-      </form>
-      <p class="small muted">The plan targets the team's measured needs, adapts to the opponent, and learns from your votes: drills you like (and drills similar to them) show up more.</p></div>
-      <div id="planOut"></div>`;
+    $("#main").innerHTML = `<div class="view">
+      <header class="page-head"><h1>Practice plan</h1><p class="lede">Built from what the team needs most, the next opponent, your court, and the drills you have voted up.</p></header>
+      <div class="split" style="grid-template-columns:minmax(0,320px) minmax(0,1fr)">
+        <form class="panel form-col" id="planForm"><h2>Practice constraints</h2>
+          <div class="two"><label class="field">Starts at<input name="start" type="time" value="18:00"></label><label class="field">Minutes<input name="minutes" type="number" value="90" min="15" max="240"></label></div>
+          <div class="two"><label class="field">Players<input name="players" type="number" value="10" min="1" max="30"></label><label class="field">Hoops<input name="hoops" type="number" value="2" min="0" max="12"></label></div>
+          <div class="two"><label class="field">Court<select name="court"><option value="full">Full court</option><option value="half">Half court</option></select></label><label class="field">Hardest allowed<select name="max_intensity"><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option></select></label></div>
+          <label class="field">Preparing for<select name="opponent_id"><option value="">No one in particular</option>${opps.map((o) => `<option value="${o.id}">${esc(o.name)}</option>`).join("")}</select></label>
+          <fieldset style="border:0;padding:0;margin:0"><legend class="note" style="margin-bottom:6px">Also work on</legend>
+            <div class="chips">${Object.keys(META.dimensions).map((k) => `<label><input type="checkbox" name="focus" value="${k}">${esc(SHORT[k])}</label>`).join("")}</div></fieldset>
+          <div><button class="btn">Build the plan</button></div></form>
+        <div id="planOut"><p class="empty">Set tonight's constraints and build the plan. Each block names who to watch and how you will know it worked.</p></div>
+      </div></div>`;
     $("#planForm").addEventListener("submit", async (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
-      const body = { minutes: +fd.get("minutes"), players: +fd.get("players"), hoops: +fd.get("hoops"),
-        max_intensity: fd.get("max_intensity"), full_court: fd.get("court") !== "half", focus: fd.getAll("focus"), opponent_id: fd.get("opponent_id") ? +fd.get("opponent_id") : null };
+      const body = { minutes: +fd.get("minutes"), players: +fd.get("players"), hoops: +fd.get("hoops"), max_intensity: fd.get("max_intensity"),
+        full_court: fd.get("court") !== "half", focus: fd.getAll("focus"), opponent_id: fd.get("opponent_id") ? +fd.get("opponent_id") : null };
       const p = await api(`/api/teams/${TEAM}/plan`, { method: "POST", json: body });
-      $("#planOut").innerHTML = `<div class="card"><h3>Practice plan · ${p.total_minutes} min ${p.unfilled_minutes ? `<span class="muted small">(${p.unfilled_minutes} min free)</span>` : ""}</h3>
-        ${p.blocks.map((b) => `<div class="block">
-          <div class="min">${b.minutes}'</div>
-          <div><b>${esc(b.drill.name)}</b> <span class="pill info">${esc(b.why)}</span> ${b.preference > 1.05 ? `<span class="pill good">coach favourite</span>` : ""}
-            <div class="small">${esc(b.drill.setup)}</div>
-            <div class="small muted">Cue: “${esc(b.drill.cue)}” · Success: ${esc(b.drill.metric)}</div>
-            ${b.focus_players.length ? `<div class="small muted">Watch: ${b.focus_players.map(esc).join(", ")}</div>` : ""}</div>
-          <div class="vote"><button class="ghost icon" data-d="${b.drill.id}" data-r="1" aria-label="More drills like ${esc(b.drill.name)}">${ICON.up}</button><button class="ghost icon" data-d="${b.drill.id}" data-r="-1" aria-label="Fewer drills like ${esc(b.drill.name)}">${ICON.down}</button></div>
-        </div>`).join("")}</div>`;
-      $("#planOut").querySelector("h3").insertAdjacentHTML("beforeend", " " + askBtn("Explain this plan and adjust it if something doesn't fit our week.", `Practice plan: ${p.blocks.map((b) => `${b.minutes}' ${b.drill.name}`).join("; ")}`));
+      let [hh, mm] = (fd.get("start") || "18:00").split(":").map(Number); let t = hh * 60 + mm;
+      const clock = () => `${String(Math.floor(t / 60) % 24).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`;
+      $("#planOut").innerHTML = `<h2>${p.total_minutes} minutes${p.opponent ? `, ready for ${esc(p.opponent)}` : ""}</h2>
+        <p class="note">${p.unfilled_minutes ? `${p.unfilled_minutes} minutes left open for your own work. ` : ""}<span class="actions" style="display:inline-flex">${askBtn("Talk this plan through", "Explain this plan and adjust it if something doesn't fit our week.", `Practice plan: ${p.blocks.map((b) => `${b.minutes}' ${b.drill.name}`).join("; ")}`)}</span></p>
+        <div class="plan">${p.blocks.map((b) => { const at = clock(); t += b.minutes; return `<div class="block">
+          <div class="clock">${at}<small>${b.minutes} min</small></div>
+          <div><h3>${esc(b.drill.name)}</h3><p class="why">${esc(b.why)}${b.preference > 1.05 ? ", one of your favourites" : ""}</p>
+            <p class="setup">${esc(b.drill.setup)}</p>
+            <p class="cue">Cue <b>“${esc(trim(b.drill.cue))}”</b>. It worked if: ${esc(trim(b.drill.metric))}.${b.focus_players.length ? ` Watch ${b.focus_players.map(esc).join(", ")}.` : ""}</p></div>
+          <div class="vote"><button type="button" class="btn quiet small" data-d="${b.drill.id}" data-r="1">More like this</button><button type="button" class="btn quiet small" data-d="${b.drill.id}" data-r="-1">Less</button></div></div>`; }).join("")}</div>`;
       bindAsk($("#planOut"));
-      $("#planOut").querySelectorAll("[data-d]").forEach((btn) => btn.addEventListener("click", async () => {
+      $$("[data-d]", $("#planOut")).forEach((btn) => btn.addEventListener("click", async () => {
         await api(`/api/teams/${TEAM}/feedback`, { method: "POST", json: { drill_id: btn.dataset.d, rating: +btn.dataset.r, ran: +btn.dataset.r > 0 } });
-        toast("Thanks, HoopLab will remember that");
+        btn.parentElement.innerHTML = `<span class="note">${+btn.dataset.r > 0 ? "Noted, more like this" : "Noted, less of this"}</span>`;
       }));
     });
   },
 
   async homework() {
-    const el = $("#tab-homework");
     const rows = await api(`/api/teams/${TEAM}/homework`);
-    el.innerHTML = `<div class="form"><button id="assign">Assign this week's homework</button>
-      <span class="muted small">Two personal items per player, from their top development needs, each with a playlist of their own possessions to watch first (when film exists). Logged results feed back into the model (at reduced weight).</span></div>
-      <div class="card"><table><tr><th>Player</th><th>Focus</th><th>Drill</th><th>Target</th><th>Due</th><th>Status</th><th></th></tr>
-      ${rows.map((h) => `<tr><td>${esc(h.player)}</td><td>${esc(META.dimensions[h.dimension]?.name)}</td><td>${esc(h.drill?.name)}<div class="small muted">${esc(h.drill?.setup)}</div>${h.playlist_id ? `<button class="ghost" data-pl="${h.playlist_id}" style="margin-top:4px;padding:3px 9px">${ICON.film} Watch first</button>` : ""}</td>
-        <td class="small">${esc(h.target)}</td><td>${esc(h.due)}</td><td>${h.status === "done" ? `<span class="pill good">done${h.attempts ? ` ${h.made}/${h.attempts}` : ""}</span>` : `<span class="pill">assigned</span>`}</td>
-        <td>${h.status !== "done" ? `<button class="ghost" data-h="${h.id}">Log result</button>` : ""}</td></tr>`).join("") || `<tr><td colspan="7" class="muted">No homework yet.</td></tr>`}
-      </table></div>`;
+    const open = rows.filter((h) => h.status !== "done").length;
+    $("#main").innerHTML = `<div class="view">
+      <header class="page-head"><h1>Homework</h1>
+        <p class="lede">Two items per player from their biggest needs, each with their own possessions to watch first. Logged results count as evidence, at lower weight than games.</p>
+        <div class="actions"><button type="button" class="btn" id="assign">Assign this week's homework</button>${rows.length ? `<span class="note">${open} open, ${rows.length - open} done</span>` : ""}</div></header>
+      ${rows.length ? `<div class="tbl"><table><thead><tr><th>Player</th><th>Drill</th><th>Target</th><th>Due</th><th class="r">Result</th></tr></thead><tbody>
+      ${rows.map((h, i) => `<tr><td class="nm">${i === 0 || rows[i - 1].player !== h.player ? esc(h.player) : ""}</td>
+        <td>${esc(h.drill?.name)}<span class="sub">${esc(SHORT[h.dimension] || "")}: ${esc(h.drill?.setup)}</span>${h.playlist_id ? `<button type="button" class="btn quiet small" data-pl="${h.playlist_id}">Watch first</button>` : ""}</td>
+        <td>${esc(h.target)}</td><td style="white-space:nowrap">${day(h.due)}</td>
+        <td class="r">${h.status === "done" ? `<span class="up">Done${h.attempts ? ` ${h.made}/${h.attempts}` : ""}</span>` : `<button type="button" class="btn line small" data-h="${h.id}">Log result</button>`}</td></tr>`).join("")}
+      </tbody></table></div>` : `<p class="empty"><b>Nothing assigned yet.</b> Assign the week and every player gets two items from their own numbers.</p>`}</div>`;
     $("#assign").addEventListener("click", async () => {
       const r = await api(`/api/teams/${TEAM}/homework/assign`, { method: "POST" });
-      toast(`${r.length} assignments created`); RENDER.homework();
+      toast(`${r.length} items assigned`); go("homework", { focus: false });
     });
-    el.querySelectorAll("[data-pl]").forEach((b) => b.addEventListener("click", () => openPlaylist(b.dataset.pl)));
-    el.querySelectorAll("[data-h]").forEach((b) => b.addEventListener("click", () => {
-      const cell = b.parentElement;
-      cell.innerHTML = `<form class="form" style="margin:0;flex-wrap:nowrap" data-hf="${b.dataset.h}"><label class="sr-only" for="hr${b.dataset.h}">Result</label>
-        <input id="hr${b.dataset.h}" name="r" placeholder="made/attempts" style="width:120px" pattern="\\s*\\d+\\s*/\\s*\\d+\\s*|" title="e.g. 32/50, or leave empty"><button>Save</button></form>`;
-      const f = cell.querySelector("form"); f.r.focus();
+    $$("[data-pl]").forEach((b) => b.addEventListener("click", () => openPlaylist(b.dataset.pl)));
+    $$("[data-h]").forEach((b) => b.addEventListener("click", () => {
+      const cell = b.parentElement, id = b.dataset.h;
+      cell.innerHTML = `<form class="form-row" style="justify-content:end;flex-wrap:nowrap"><label class="sr-only" for="hr${id}">Made out of attempts</label>
+        <input id="hr${id}" name="r" placeholder="32/50" style="width:88px" pattern="\\s*\\d+\\s*/\\s*\\d+\\s*|" title="Made/attempts, for example 32/50. Leave empty if it has no count."><button class="btn small">Save</button></form>`;
+      const f = $("form", cell); f.r.focus();
       f.addEventListener("submit", async (e) => {
         e.preventDefault();
         const v = f.r.value.trim(); const [made, attempts] = v.includes("/") ? v.split("/").map(Number) : [null, null];
-        await api(`/api/homework/${f.dataset.hf}/complete`, { method: "POST", json: { made, attempts } });
-        toast("Logged. The model counts it as evidence."); RENDER.homework();
+        await api(`/api/homework/${id}/complete`, { method: "POST", json: { made, attempts } });
+        toast("Logged. The model counts it as evidence."); go("homework", { focus: false });
       });
     }));
   },
 
   async opponents() {
-    const el = $("#tab-opponents");
     const opps = await api(`/api/teams/${TEAM}/opponents`);
-    el.innerHTML = `
-      <div class="card" style="margin-bottom:16px"><h3>Add opponent</h3>
-        <form class="form" id="addOpp"><label>Name<input name="name" required></label><label>Notes<input name="notes" style="width:320px"></label><button>Add</button></form>
-        <p class="small muted">Scouting builds up from opponent events tagged in your game videos; manual ratings fill the gaps.</p></div>
-      <div class="form">${opps.map((o) => `<button class="ghost" data-o="${o.id}">${esc(o.name)}</button>`).join("")}</div>
-      <div id="matchOut"></div>`;
+    if (!opps.find((o) => o.id === OPP)) OPP = opps[0]?.id ?? null;
+    $("#main").innerHTML = `<div class="split list">
+      <nav aria-label="Opponents">
+        <ul class="roster">${opps.map((o) => `<li><button type="button" data-o="${o.id}" ${o.id === OPP ? `aria-current="true"` : ""} style="grid-template-columns:minmax(0,1fr)"><span class="nm">${esc(o.name)}</span></button></li>`).join("")}</ul>
+        <details class="add" ${opps.length ? "" : "open"}><summary>Add an opponent</summary>
+          <form class="form-col" id="addOpp"><label class="field">Name<input name="name" required autocomplete="off"></label><label class="field">What you know<textarea name="notes" rows="3" placeholder="Big lineup, presses after made baskets"></textarea></label><div><button class="btn small">Add</button></div></form></details>
+      </nav><div id="oppOut">${opps.length ? `<p class="loading">Loading…</p>` : `<p class="empty"><b>No opponents yet.</b> Add one, then tag their possessions in the film room to build the scouting picture.</p>`}</div></div>`;
     $("#addOpp").addEventListener("submit", async (e) => {
       e.preventDefault();
-      await api(`/api/teams/${TEAM}/opponents`, { method: "POST", json: Object.fromEntries(new FormData(e.target)) });
-      RENDER.opponents();
+      const o = await api(`/api/teams/${TEAM}/opponents`, { method: "POST", json: Object.fromEntries(new FormData(e.target)) });
+      OPP = o.id; go("opponents", { focus: false });
     });
-    const show = async (id) => {
-      const [m, pt] = await Promise.all([api(`/api/opponents/${id}/matchup`), api(`/api/opponents/${id}/play-types`)]);
-      $("#matchOut").innerHTML = `<div class="grid2">
-        <div class="card"><h3>Game plan vs ${esc(m.opponent.name)} <button class="ghost ask" id="reportBtn" style="float:right">${ICON.doc} Scouting report</button></h3><p class="muted small">${esc(m.opponent.notes)}</p>
-          ${m.game_plan.map((g) => `<div style="margin-bottom:10px">• ${esc(g.insight)}<div class="small muted">${esc(g.evidence)}</div></div>`).join("") || `<span class="muted">Not enough scouting data yet.</span>`}</div>
-        <div class="card"><h3>Head to head</h3><table><tr><th>Skill</th><th>Us</th><th>Them</th><th>League</th><th>Edge</th></tr>
-          ${m.comparison.map((r) => `<tr><td>${esc(r.name)}</td><td>${pct(r.us)}</td><td>${pct(r.them)} <span class="small muted">${esc(r.source)}</span></td><td class="muted">${pct(r.league)}</td><td class="${r.edge >= 0 ? "edge-pos" : "edge-neg"}">${r.edge == null ? "–" : (r.edge >= 0 ? "+" : "") + Math.round(r.edge * 100)}</td></tr>`).join("")}
-        </table></div>
-        <div class="card" id="oppPt"><h3>How ${esc(m.opponent.name)} scores (play types)</h3>${playTypeTable(pt, true)}</div></div>`;
-      bindPlayTypeRows($("#oppPt"), m.opponent.name, { opponent_id: id });
-      $("#matchOut .card h3").insertAdjacentHTML("afterend", `<div class="row-actions" style="margin:0 0 8px">${askBtn(`We play ${m.opponent.name} next. Plan the week: practices, who guards whom, what we run.`, `Opponent: ${m.opponent.name}`)}</div>`);
-      bindAsk($("#matchOut"));
-      $("#reportBtn").addEventListener("click", async () => {
-        modal(`<p class="muted">Writing the scouting report…</p>`);
-        const lang = /[\u0590-\u05FF]/.test(navigator.language) || navigator.language.startsWith("he") ? "he" : "en";
-        const r = await api(`/api/opponents/${id}/scouting-report?lang=${lang}`);
-        modal(`<div class="report" dir="auto">${md(r.text)}</div><p class="small muted">Written by ${esc(r.source)} · every number comes from HoopLab's model <button class="ghost" onclick="window.print()">Print</button></p>`);
-      });
-    };
-    el.querySelectorAll("[data-o]").forEach((b) => b.addEventListener("click", () => show(b.dataset.o)));
-    if (opps[0]) show(opps[0].id);
+    $$("[data-o]").forEach((b) => b.addEventListener("click", () => {
+      OPP = Number(b.dataset.o);
+      $$("[data-o]").forEach((x) => (x === b ? x.setAttribute("aria-current", "true") : x.removeAttribute("aria-current")));
+      opponentSheet(OPP);
+    }));
+    if (OPP) opponentSheet(OPP);
   },
 
-  async data() {
-    const el = $("#tab-data");
-    const [sessions, opps, health, players] = await Promise.all([
-      api(`/api/teams/${TEAM}/sessions`), api(`/api/teams/${TEAM}/opponents`), api("/api/health"), api(`/api/teams/${TEAM}/players`)]);
-    el.innerHTML = `
-      <div class="grid2">
-      <div class="card"><h3>New game / practice</h3>
-        <form class="form" id="newSession">
-          <label>Type<select name="kind"><option>game</option><option>practice</option><option>scrimmage</option></select></label>
-          <label>Title<input name="title"></label>
-          <label>Opponent<select name="opponent_id"><option value="">–</option>${opps.map((o) => `<option value="${o.id}">${esc(o.name)}</option>`).join("")}</select></label>
-          <button>Create</button></form>
-        <h3>Add data to a session</h3>
-        <form class="form" id="upload">
-          <label>Session<select name="session">${sessions.map((s) => `<option value="${s.id}">${esc(s.title || s.kind)} · ${esc(s.date.slice(0, 10))}</option>`).join("")}</select></label>
-          <label>File<input type="file" name="file" accept=".mp4,.mov,.avi,.mkv,.csv,.json"></label>
-          <button>Upload</button></form>
-        <p class="small muted">Video: ${health.video_processing ? "<span class='pill good'>processing enabled</span>" : "<span class='pill bad'>vision extra not installed</span> videos are stored; add a track file (.json) or a tagged event log (.csv)."}<br>
-        CSV columns: <code>player_number,type,outcome,zone,assist,opponent</code>, optional <code>play_type,t_start,t_end</code> (links each event to its clip) · types: shot, pass, turnover, touch, creation, defense, rotation, steal, rebound, sprint</p>
-      </div>
-      <div class="card"><h3>Coach notes → data <span class="pill info">AI</span></h3>
-        <p class="small muted">Write or dictate what you saw, in any language. Claude turns it into events for the selected session.</p>
-        <label class="sr-only" for="notesText">Coach notes</label>
-        <textarea id="notesText" dir="auto" rows="4" style="width:100%" placeholder="e.g. Noam 3/5 from three, two turnovers vs pressure. Ori didn't sprint back twice. Their #12 kills us on the offensive glass."></textarea>
-        <div class="form" style="margin-top:8px"><button id="notesBtn">Analyse notes</button>${micButton("#notesText")}</div>
-        <h3>Film AI <span class="pill info">AI</span></h3>
-        <p class="small muted">Upload stills (or a short clip with the vision extra). Claude reads the play, tags events by jersey number and adds scouting notes.</p>
-        <form class="form" id="filmForm"><input type="file" name="files" multiple accept="image/*,video/*"><input name="our_color" placeholder="our jersey colour"><button>Analyse film</button></form>
-        <div id="aiOut" class="small"></div>
-      </div>
-      <div class="card"><h3>Tagger</h3>
-        <p class="small muted">Tag live from the bench, or play the session's film here and tag as you watch: each tag then opens its own clip everywhere in HoopLab.</p>
-        <div class="tag-video" id="tagVideoWrap"></div>
-        <div class="form"><label>Player<select id="tagPlayer">${players.map((p) => `<option value="${p.id}">#${esc(p.number ?? "")} ${esc(p.name)}</option>`).join("")}</select></label>
-          <label>Play type<select id="tagPlay"><option value="">–</option>${Object.entries(META.play_types).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join("")}</select></label></div>
-        <div class="form" id="tagBtns">
-          ${[["shot", "rim", true, "Rim ✓"], ["shot", "rim", false, "Rim ✗"], ["shot", "mid", true, "Mid ✓"], ["shot", "mid", false, "Mid ✗"], ["shot", "three", true, "3PT ✓"], ["shot", "three", false, "3PT ✗"],
-             ["shot", "ft", true, "FT ✓"], ["shot", "ft", false, "FT ✗"], ["turnover", null, false, "Turnover"], ["creation", null, true, "Created shot"], ["defense", null, true, "Stop"], ["defense", null, false, "Beaten"],
-             ["rotation", null, true, "Good rotation"], ["rotation", null, false, "Late help"], ["rebound", null, true, "Rebound"], ["rebound", null, false, "Lost board"], ["sprint", null, true, "Sprinted back"], ["sprint", null, false, "Jogged back"]]
-            .map(([t, z, o, l]) => `<button class="ghost" data-t="${t}" data-z="${z ?? ""}" data-ok="${o}">${l}</button>`).join("")}
-        </div></div>
-      </div>
-      <div class="card" style="margin-top:16px"><h3>Sessions</h3><table><tr><th>Date</th><th>Type</th><th>Title</th><th>Events</th><th>Status</th><th></th></tr>
-        ${sessions.map((s) => `<tr><td>${esc(s.date.slice(0, 10))}</td><td>${esc(s.kind)}</td><td>${esc(s.title)}</td><td>${s.events}</td><td class="small">${esc(s.status)}</td>
-          <td class="row-actions" style="margin:0">${s.has_video ? `<button class="ghost ask" data-watch="${s.id}" data-title="${esc(s.title)}">${ICON.film} Watch</button>` : ""}${s.events ? `<button class="ghost ask" data-debrief="${s.id}">${ICON.spark} Debrief</button>` : ""}</td></tr>`).join("")}</table></div>`;
+  async film() {
+    const [sessions, opps, health, players] = await Promise.all([api(`/api/teams/${TEAM}/sessions`), api(`/api/teams/${TEAM}/opponents`), api("/api/health"), api(`/api/teams/${TEAM}/players`)]);
+    const KIND = { game: "Game", practice: "Practice", scrimmage: "Scrimmage" };
+    const TAGS = [["shot", "rim", "Shot at the rim", "Made", "Missed"], ["shot", "mid", "Mid-range shot", "Made", "Missed"], ["shot", "three", "Three", "Made", "Missed"], ["shot", "ft", "Free throw", "Made", "Missed"],
+      ["defense", "", "On-ball defense", "Stop", "Beaten"], ["rotation", "", "Help rotation", "On time", "Late"], ["rebound", "", "Rebound chance", "Won", "Lost"], ["sprint", "", "Getting back", "Sprinted", "Jogged"]];
+    $("#main").innerHTML = `<div class="view">
+      <header class="page-head"><h1>Film room</h1><p class="lede">Every game and practice you have added. A debrief is written after each one; tagged moments become clips everywhere in HoopLab.</p></header>
+      <section aria-labelledby="hSess"><h2 id="hSess">Sessions</h2>
+        ${sessions.length ? `<div class="tbl"><table><thead><tr><th>Date</th><th>Session</th><th class="r">Events</th><th class="r"></th></tr></thead><tbody>
+        ${sessions.map((s, n) => `<tr${n >= 8 ? " hidden" : ""}><td style="white-space:nowrap">${day(s.date)}</td><td>${esc(s.title || KIND[s.kind])}<span class="sub">${KIND[s.kind] || esc(s.kind)}${s.status && s.status !== "analyzed" ? ` · ${esc(s.status)}` : ""}</span></td><td class="r">${nf.format(s.events)}</td>
+          <td class="r"><span class="actions" style="justify-content:end">${s.has_video ? `<button type="button" class="btn line small" data-watch="${s.id}" data-title="${esc(s.title)}">${ICON.film}Watch</button>` : ""}${s.events ? `<button type="button" class="btn quiet small" data-debrief="${s.id}">Debrief</button>` : ""}</span></td></tr>`).join("")}</tbody></table></div>${sessions.length > 8 ? `<p style="margin-top:var(--s3)"><button type="button" class="btn quiet small" id="allSess">Show all ${sessions.length} sessions</button></p>` : ""}`
+        : `<p class="empty"><b>No sessions yet.</b> Add your last game below, then upload its film or tag it from the bench.</p>`}</section>
+      <div class="split even">
+        <section aria-labelledby="hAdd"><h2 id="hAdd">New session</h2>
+          <form class="form-col" id="newSession"><div class="two"><label class="field">Type<select name="kind"><option value="game">Game</option><option value="practice">Practice</option><option value="scrimmage">Scrimmage</option></select></label>
+            <label class="field">Opponent<select name="opponent_id"><option value="">None</option>${opps.map((o) => `<option value="${o.id}">${esc(o.name)}</option>`).join("")}</select></label></div>
+            <label class="field">Title<input name="title" placeholder="Away at Maccabi North"></label><div><button class="btn line">Add session</button></div></form>
+          <h2 style="margin-top:var(--s10)">Data import</h2>
+          <form class="form-col" id="upload"><label class="field">Into session<select name="session" id="sessPick">${sessions.map((s) => `<option value="${s.id}">${esc(s.title || KIND[s.kind])}, ${day(s.date)}</option>`).join("")}</select></label>
+            <label class="field">Film, tracking file or tagged event log<input type="file" name="file" accept=".mp4,.mov,.avi,.mkv,.csv,.json"></label><div><button class="btn line">Upload</button></div></form>
+          <p class="note" style="margin-top:var(--s3)">${health.video_processing ? "Video is analysed on upload." : "Video is stored and playable. Automatic tracking needs the vision extra; until then add a tracking file (.json) or an event log (.csv)."}
+            Event log columns: <code>player_number, type, outcome, zone, assist, opponent</code>, plus optional <code>play_type, t_start, t_end</code> to link each event to its clip.</p>
+          <h2 style="margin-top:var(--s10)">Coach notes</h2>
+          <p class="note" style="margin-bottom:var(--s2)">Write or dictate what you saw, in Hebrew or English. Claude turns it into tagged events for the session above.</p>
+          <label class="sr-only" for="notesText">Coach notes</label>
+          <textarea id="notesText" dir="auto" rows="4" placeholder="Noam 3 of 5 from three, two turnovers against the press. Ori did not sprint back twice. Their 12 owns the offensive glass."></textarea>
+          <div class="actions" style="margin-top:var(--s2)"><button type="button" class="btn line" id="notesBtn">Turn into events</button>${micButton("#notesText")}</div>
+          <details class="add" style="margin-top:var(--s5)"><summary>Read stills from the film</summary>
+            <form class="form-col" id="filmForm"><p class="note">Upload frames from the game. Claude reads each play, tags events by jersey number and adds scouting notes.</p><input type="file" name="files" multiple accept="image/*,video/*"><label class="field">Our jersey colour<input name="our_color" placeholder="white"></label><div><button class="btn line small">Read the frames</button></div></form></details>
+          <div id="aiOut" class="ai-out" aria-live="polite"></div></section>
+        <section aria-labelledby="hTag"><h2 id="hTag">Live tagging</h2>
+          <p class="note" style="margin-bottom:var(--s3)">Play the selected session's film and tag as it runs. Each tag keeps the five seconds before it as its clip. Without film, tags still count.</p>
+          <div id="tagVideoWrap"></div>
+          <div class="form-col" style="margin:var(--s4) 0"><div class="two"><label class="field">Player<select id="tagPlayer">${players.map((p) => `<option value="${p.id}">${esc(p.number ?? "")} ${esc(p.name)}</option>`).join("")}</select></label>
+            <label class="field">Play type<select id="tagPlay"><option value="">Not set</option>${Object.entries(META.play_types).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join("")}</select></label></div></div>
+          <div class="tagger" id="tagBtns">${TAGS.map(([t, z, label, yes, no]) => `<span>${label}</span><button type="button" class="btn line small" data-t="${t}" data-z="${z}" data-ok="true">${yes}</button><button type="button" class="btn line small" data-t="${t}" data-z="${z}" data-ok="false">${no}</button>`).join("")}
+            <span>Ball handling</span><button type="button" class="btn line small" data-t="creation" data-z="" data-ok="true">Created a shot</button><button type="button" class="btn line small" data-t="turnover" data-z="" data-ok="false">Turnover</button></div>
+        </section></div></div>`;
+    const main = $("#main");
     const sessById = Object.fromEntries(sessions.map((x) => [String(x.id), x]));
-    const showTagVideo = () => {
-      const sid = $("#upload [name=session]").value, sess = sessById[sid];
-      $("#tagVideoWrap").innerHTML = sess?.has_video ? `<video id="tagVideo" controls playsinline preload="metadata" src="/api/sessions/${sid}/video"></video>` : "";
-    };
-    $("#upload [name=session]").addEventListener("change", showTagVideo); showTagVideo();
-    el.querySelectorAll("[data-debrief]").forEach((b) => b.addEventListener("click", async () => {
-      modal(`<p class="muted" aria-live="polite">Writing the debrief…</p>`);
-      const d = await api(`/api/sessions/${b.dataset.debrief}/debrief`, { method: "POST" });
-      modal(`<h2>${esc(d.report.session.title || d.report.session.kind)}${d.report.opponent ? ` vs ${esc(d.report.opponent)}` : ""} <span class="pill">${esc(d.source)}</span></h2>
-        <div class="msg-box" dir="auto">${esc(d.text)}</div>
-        ${d.report.standouts.length ? `<h3 style="margin-top:14px">Against expectation</h3><table><tr><th>Player</th><th>Skill</th><th>This session</th><th>Model expected</th></tr>${d.report.standouts.map((x) => `<tr><td>${esc(x.player)}</td><td>${esc(x.name)}</td><td class="tnum ${x.z > 0 ? "edge-pos" : "edge-neg"}">${x.made}/${x.n}</td><td class="tnum muted">${pct(x.expected)}</td></tr>`).join("")}</table>` : ""}
-        <p class="small muted">Also posted to the coach's inbox.</p>`);
-    }));
-    el.querySelectorAll("[data-watch]").forEach((b) => b.addEventListener("click", async () => {
-      const all = await api(`/api/teams/${TEAM}/clips?limit=200`);
-      clipPlayer(b.dataset.title, all.filter((c) => c.session_id === Number(b.dataset.watch)));
+    const showTagVideo = () => { const sid = $("#sessPick")?.value, s = sessById[sid];
+      $("#tagVideoWrap").innerHTML = s?.has_video ? `<video id="tagVideo" class="video" controls playsinline preload="metadata" src="/api/sessions/${sid}/video"></video>` : ""; };
+    $("#sessPick").addEventListener("change", showTagVideo); showTagVideo();
+    $$("[data-watch]", main).forEach((b) => b.addEventListener("click", () => sessionFilm(b.dataset.watch, b.dataset.title)));
+    $("#allSess")?.addEventListener("click", (e) => { $$("tr[hidden]", main).forEach((r) => (r.hidden = false)); e.currentTarget.remove(); });
+    $$("[data-debrief]", main).forEach((b) => b.addEventListener("click", async () => {
+      modal(`<p class="loading" aria-live="polite">Writing the debrief…</p>`);
+      const d = await api(`/api/sessions/${b.dataset.debrief}/debrief?lang=${LANG()}`, { method: "POST" });
+      const r = d.report;
+      modal(`<h2 id="modalTitle">${esc(r.session.title || KIND[r.session.kind])}${r.opponent && !(r.session.title || "").includes(r.opponent) ? ` vs ${esc(r.opponent)}` : ""}</h2><p class="note">${day(r.session.date)} · ${writtenBy(d.source)}</p>
+        <div class="msg-out" dir="auto">${esc(d.text)}</div>
+        ${r.standouts.length ? `<h3 style="margin:var(--s6) 0 var(--s2)">Away from what the model expected</h3><div class="tbl"><table><thead><tr><th>Player</th><th>Skill</th><th class="r">This session</th><th class="r">Expected</th></tr></thead><tbody>${r.standouts.map((x) => `<tr><td class="nm">${esc(x.player)}</td><td>${esc(x.name)}</td><td class="r ${x.z > 0 ? "up" : "down"}">${x.made}/${x.n}</td><td class="r soft">${pct(x.expected)}</td></tr>`).join("")}</tbody></table></div>` : ""}
+        <p class="note" style="margin-top:var(--s4)">Also posted to Today.</p>`);
     }));
     $("#newSession").addEventListener("submit", async (e) => {
       e.preventDefault();
-      const f = Object.fromEntries(new FormData(e.target));
-      f.opponent_id = f.opponent_id ? Number(f.opponent_id) : null;
-      await api(`/api/teams/${TEAM}/sessions`, { method: "POST", json: f });
-      RENDER.data();
+      const f = Object.fromEntries(new FormData(e.target)); f.opponent_id = f.opponent_id ? Number(f.opponent_id) : null;
+      await api(`/api/teams/${TEAM}/sessions`, { method: "POST", json: f }); toast("Session added"); go("film", { focus: false });
     });
     $("#upload").addEventListener("submit", async (e) => {
       e.preventDefault();
       const fd = new FormData(e.target), file = fd.get("file"), sid = fd.get("session");
+      if (!sid) return toast("Add a session first");
       if (!file || !file.name) return toast("Choose a file");
-      let r;
       if (file.name.endsWith(".json")) {
-        r = await api(`/api/sessions/${sid}/tracks`, { method: "POST", json: { tracks: JSON.parse(await file.text()), our_team: 1 } });
-        toast(`Video analysis: ${r.events_detected} events detected, ${r.events_stored} stored. Debrief posted to your inbox.`);
+        const r = await api(`/api/sessions/${sid}/tracks`, { method: "POST", json: { tracks: JSON.parse(await file.text()), our_team: 1 } });
+        toast(`${r.events_stored} events from the tracking file. The debrief is on Today.`);
       } else {
         const body = new FormData(); body.append("file", file);
-        const path = file.name.endsWith(".csv") ? `/api/sessions/${sid}/events.csv` : `/api/sessions/${sid}/video`;
-        r = await api(path, { method: "POST", body });
+        const r = await api(file.name.endsWith(".csv") ? `/api/sessions/${sid}/events.csv` : `/api/sessions/${sid}/video`, { method: "POST", body });
         toast(r.stored !== undefined ? `${r.stored} events stored` : r.detail || r.status);
       }
-      RENDER.data();
+      go("film", { focus: false });
     });
-    const aiOut = (r) => { $("#aiOut").innerHTML = `<p><b>${r.stored} events stored.</b></p>${r.observations?.length ? `<p>Observations:</p><ul>${r.observations.map((o) => `<li dir="auto">${esc(o)}</li>`).join("")}</ul>` : ""}${r.unresolved?.length ? `<p class="muted">Not mapped: ${r.unresolved.map(esc).join("; ")}</p>` : ""}`; };
+    const aiOut = (r) => { $("#aiOut").innerHTML = `<p><b>${r.stored} events stored.</b></p>${r.observations?.length ? `<ul>${r.observations.map((o) => `<li dir="auto">${esc(o)}</li>`).join("")}</ul>` : ""}${r.unresolved?.length ? `<p class="soft">Could not place: ${r.unresolved.map(esc).join("; ")}</p>` : ""}`; };
     $("#notesBtn").addEventListener("click", async () => {
-      const sid = Number($("#upload [name=session]").value); const notes = $("#notesText").value;
-      if (!sid || !notes.trim()) return toast("Pick a session and write some notes");
+      const sid = Number($("#sessPick")?.value), notes = $("#notesText").value;
+      if (!sid || !notes.trim()) return toast("Pick a session and write what you saw");
       $("#aiOut").textContent = "Reading your notes…";
       aiOut(await api(`/api/sessions/${sid}/notes`, { method: "POST", json: { notes } }));
-      toast("Events stored; the debrief is in your inbox");
     });
     $("#filmForm").addEventListener("submit", async (e) => {
       e.preventDefault();
-      const sid = Number($("#upload [name=session]").value), fd = new FormData(e.target);
-      if (!sid) return toast("Create a session first");
+      const sid = Number($("#sessPick")?.value), fd = new FormData(e.target);
+      if (!sid) return toast("Add a session first");
       const colour = fd.get("our_color"); fd.delete("our_color");
-      $("#aiOut").textContent = "Watching the film…";
+      $("#aiOut").textContent = "Reading the frames…";
       aiOut(await api(`/api/sessions/${sid}/film${colour ? `?our_color=${encodeURIComponent(colour)}` : ""}`, { method: "POST", body: fd }));
     });
-    bindMic(el);
-    $("#tagBtns").querySelectorAll("button").forEach((b) => b.addEventListener("click", async () => {
-      let sid = sessions[0]?.id;
-      if (!sid) return toast("Create a session first");
-      sid = Number($("#upload [name=session]").value) || sid;
+    bindMic(main);
+    $$("#tagBtns button").forEach((b) => b.addEventListener("click", async () => {
+      const sid = Number($("#sessPick")?.value);
+      if (!sid) return toast("Add a session first");
       const ev = { type: b.dataset.t, player_id: Number($("#tagPlayer").value), outcome: b.dataset.ok === "true" };
       if (b.dataset.z) ev.zone = b.dataset.z;
       if ($("#tagPlay").value) ev.play_type = $("#tagPlay").value;
       const v = $("#tagVideo");
-      if (v && v.currentTime > 0) { ev.t_start = Math.max(0, +(v.currentTime - 4).toFixed(2)); ev.t_end = +(v.currentTime + 1).toFixed(2); }
+      if (v && v.currentTime > 0) { ev.t_start = Math.max(0, +(v.currentTime - 5).toFixed(2)); ev.t_end = +(v.currentTime + 1).toFixed(2); }
       await api(`/api/sessions/${sid}/events`, { method: "POST", json: [ev] });
-      toast(`Tagged: ${b.textContent}${ev.t_start !== undefined ? ` at ${Math.round(v.currentTime)}s` : ""}`);
+      toast(`${$("#tagPlayer").selectedOptions[0].text.trim()}: ${b.previousElementSibling?.tagName === "SPAN" ? b.previousElementSibling.textContent : b.previousElementSibling.previousElementSibling.textContent}, ${b.textContent.toLowerCase()}${ev.t_start !== undefined ? ` at ${Math.round(v.currentTime)} s` : ""}`);
     }));
   },
 };
+
+// ---------------------------------------------------------------- the player sheet
+async function playerSheet(card) {
+  const pid = card.player.id, p = card.player;
+  const h = await api(`/api/players/${pid}/history`);
+  if (PLAYER !== pid) return;
+  let dims = [...new Set([...card.focus, ...card.strengths.map((s) => s.dimension), h.most_improved])].filter(Boolean).slice(0, 3);
+  const ctx = `Player: ${p.name} (#${p.number ?? "?"}, ${p.position})`;
+  const groups = GROUPS.map(([g, label]) => {
+    const rows = Object.entries(card.skills).filter(([, s]) => s.group === g);
+    return rows.length ? `<h3>${label}</h3>${rows.map(([k, s]) => skillRow(pid, p.name, k, s)).join("")}` : "";
+  }).join("");
+  const hw = card.homework || [];
+  $("#sheet").innerHTML = `<div class="stack">
+    <header class="sheet-head"><div class="big-n" aria-hidden="true">${esc(p.number ?? "")}</div>
+      <div><h1>${esc(p.name)}</h1><p class="facts">${esc(p.position)}${p.height_cm ? `, ${p.height_cm} cm` : ""}. ${nf.format(card.events)} tagged events.${card.focus.length ? ` This week: ${card.focus.map((d) => esc(short(d).toLowerCase())).join(" and ")}.` : ""}</p></div>
+      <div class="actions"><button type="button" class="btn line" id="pmFilm">${ICON.film}All film</button><button type="button" class="btn line" id="pmMsg">Write ${esc(first(p.name))} a message</button>
+        ${askBtn(`Ask about ${first(p.name)}`, `How is ${p.name} doing, and what should we focus on with ${first(p.name)}?`, ctx)}<button type="button" class="btn quiet" id="pmEdit">Edit</button></div></header>
+    <div id="pmOut"></div>
+    <div class="sheet-grid">
+      <section aria-labelledby="hShot"><h2 id="hShot">Shot chart</h2>${shotChart(card)}
+        <p class="court-key">Green zones are above what the position expects, red below. Select a zone to watch those shots.</p></section>
+      <section class="skills" aria-labelledby="hSk"><h2 id="hSk">Skills</h2>${groups}${skillKey}</section>
+    </div>
+    <section class="progress" aria-labelledby="hProg"><h2 id="hProg">Progress</h2><p class="note" style="margin-bottom:var(--s3)">Estimates over the last ${h.dates.length} weeks. The number is the change over the last ${h.change_weeks}.</p>
+      <div id="pmChart"></div><div class="series" id="pmLegend"></div></section>
+  </div>`;
+  const draw = () => {
+    const colors = dims.map((_, k) => SERIES[k % SERIES.length]);
+    $("#pmChart").innerHTML = progressChart(h, dims, colors);
+    $("#pmLegend").innerHTML = Object.keys(h.series).map((d) => { const k = dims.indexOf(d);
+      return `<label class="${k >= 0 ? "on" : ""}"><input type="checkbox" data-dim="${d}" ${k >= 0 ? "checked" : ""}>${k >= 0 ? `<i style="background:${colors[k]}"></i>` : ""}${esc(SHORT[d])} <span class="${h.change[d] > 0.005 ? "up" : h.change[d] < -0.005 ? "down" : "soft"}">${signed(h.change[d])}</span></label>`; }).join("");
+    $$("[data-dim]", $("#pmLegend")).forEach((c) => c.addEventListener("change", () => {
+      dims = c.checked ? [...dims, c.dataset.dim].slice(-5) : dims.filter((d) => d !== c.dataset.dim);
+      if (!dims.length) dims = [c.dataset.dim];
+      draw();
+    }));
+  };
+  draw();
+  const sheet = $("#sheet");
+  bindAsk(sheet);
+  const watchDim = (dim) => openClips(`${p.name}: ${META.dimensions[dim].name}`, { player_id: pid, dimension: dim });
+  $$("[data-sp]", sheet).forEach((r) => r.addEventListener("click", () => watchDim(r.dataset.dim)));
+  $$("[data-zone]", sheet).forEach((z) => {
+    z.addEventListener("click", () => watchDim(z.dataset.zone));
+    z.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); watchDim(z.dataset.zone); } });
+  });
+  $("#pmFilm").addEventListener("click", () => openClips(`${p.name}: all film`, { player_id: pid }));
+  $("#pmMsg").addEventListener("click", async () => {
+    $("#pmOut").innerHTML = `<p class="loading" aria-live="polite">Writing ${esc(first(p.name))}'s message…</p>`;
+    const m = await api(`/api/players/${pid}/message?lang=${LANG()}`);
+    $("#pmOut").innerHTML = `<h2>Message to ${esc(first(p.name))}</h2><p class="note">${writtenBy(m.source)} Read it before you send it.</p><div class="msg-out" dir="auto">${esc(m.text)}</div>
+      <div class="actions" style="margin-top:var(--s3)"><button type="button" class="btn line small" id="pmCopy">Copy</button><a class="btn line small" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(m.text)}">Open in WhatsApp</a></div>`;
+    $("#pmCopy").addEventListener("click", async () => { await navigator.clipboard.writeText(m.text); toast("Copied"); });
+  });
+  $("#pmEdit").addEventListener("click", () => {
+    modal(`<h2 id="modalTitle">Edit ${esc(p.name)}</h2><form class="form-col" id="pmForm"><label class="field">Name<input name="name" value="${esc(p.name)}" required></label>
+      <div class="two"><label class="field">Number<input name="number" type="number" min="0" max="99" value="${esc(p.number ?? "")}"></label>
+      <label class="field">Position<select name="position">${META.positions.map((x) => `<option ${x === p.position ? "selected" : ""}>${x}</option>`).join("")}</select></label></div>
+      <div class="actions"><button class="btn">Save</button><button type="button" class="btn quiet danger" id="pmDel">Remove from the team</button></div></form>`, "narrow");
+    $("#pmForm").addEventListener("submit", async (e) => {
+      e.preventDefault(); const f = Object.fromEntries(new FormData(e.target)); f.number = f.number ? Number(f.number) : null;
+      await api(`/api/players/${pid}`, { method: "PATCH", json: f }); toast("Saved"); closeModal(); loadTeams(TEAM);
+    });
+    $("#pmDel").addEventListener("click", async (e) => {
+      const b = e.currentTarget;
+      if (!b.dataset.armed) { b.dataset.armed = "1"; b.textContent = `Remove ${first(p.name)} and all of their data`; b.insertAdjacentHTML("afterend", `<span class="note" role="alert">This cannot be undone. Select again to confirm.</span>`); return; }
+      await api(`/api/players/${pid}`, { method: "DELETE" }); toast(`${p.name} removed`); closeModal(); PLAYER = null; loadTeams(TEAM);
+    });
+  });
+}
+
+// ---------------------------------------------------------------- the opponent sheet
+async function opponentSheet(id) {
+  const [m, pt] = await Promise.all([api(`/api/opponents/${id}/matchup`), api(`/api/opponents/${id}/play-types`)]);
+  if (OPP !== id) return;
+  const o = m.opponent;
+  const rows = m.comparison.map((r) => `<div>${esc(SHORT[r.dimension] || r.name)}</div>
+    <div class="us"><i style="width:${(r.us || 0) * 100}%"></i><span>${pct(r.us)}</span></div>
+    <div class="them"><i style="width:${(r.them || 0) * 100}%"></i><span>${pct(r.them)}</span></div>
+    <div class="r ${r.edge == null ? "soft" : r.edge >= 0 ? "up" : "down"}">${r.edge == null ? "n/a" : signed(r.edge)}</div>`).join("");
+  $("#oppOut").innerHTML = `<div class="stack">
+    <header class="page-head"><h1>vs ${esc(o.name)}</h1>${o.notes ? `<p class="lede" dir="auto">${esc(o.notes)}</p>` : ""}
+      <div class="actions"><button type="button" class="btn" id="reportBtn">Write the scouting report</button>${askBtn("Plan the week for this game", `We play ${o.name} next. Plan the week: practices, who guards whom, what we run.`, `Opponent: ${o.name}`)}</div></header>
+    <div class="split even">
+      <section aria-labelledby="hKeys"><h2 id="hKeys">Keys to the game</h2>
+        ${m.game_plan.length ? `<ol class="keys">${m.game_plan.map((g) => `<li>${esc(g.insight)}<span class="sub">${esc(g.evidence)}</span></li>`).join("")}</ol>` : `<p class="empty">Not enough on them yet. Tag their possessions in the film room.</p>`}</section>
+      <section aria-labelledby="hH2h"><h2 id="hH2h">Head to head</h2>
+        <div class="h2h"><div class="hd">Skill</div><div class="hd" style="text-align:right">Us</div><div class="hd">Them</div><div class="hd r">Edge</div>${rows}</div>
+        <p class="note" style="margin-top:var(--s2)">Their numbers come from tagged film where we have it and from your ratings where we do not.</p></section>
+    </div>
+    <section id="oppPt" aria-labelledby="hOppPt"><h2 id="hOppPt">Their play types</h2>${playTypeTable(pt, true)}</section></div>`;
+  bindPlayTypeRows($("#oppPt"), o.name, { opponent_id: id });
+  bindAsk($("#oppOut"));
+  $("#reportBtn").addEventListener("click", async () => {
+    modal(`<p class="loading" aria-live="polite">Writing the scouting report…</p>`);
+    const r = await api(`/api/opponents/${id}/scouting-report?lang=${LANG()}`);
+    modal(`<div class="report" dir="auto" id="modalTitle">${md(r.text)}</div><div class="actions" style="margin-top:var(--s5)"><span class="note">${writtenBy(r.source)}</span><button type="button" class="btn line small" onclick="window.print()">Print</button></div>`);
+  });
+}
 
 (async function init() {
   META = await api("/api/meta");

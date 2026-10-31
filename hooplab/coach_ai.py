@@ -152,7 +152,7 @@ def template_debrief(r: dict) -> str:
     shots = r["team"]["shooting"]
     if shots:
         out.append("Shooting: " + ", ".join(f"{z} {v['made']}/{v['attempts']}" for z, v in shots.items())
-                   + f"; {r['team']['turnovers']} turnovers.")
+                   + f"; {r['team']['turnovers']} turnover{'' if r['team']['turnovers'] == 1 else 's'}.")
     up = [x for x in r["standouts"] if x["z"] > 0][:3]
     down = [x for x in r["standouts"] if x["z"] < 0][:3]
     for x in up:
