@@ -1,0 +1,9 @@
+player_number,type,outcome,zone,assist,opponent
+3,shot,1,three,0,0
+3,turnover,0,,0,0
+7,shot,0,mid,0,0
+7,defense,1,,0,0
+14,rebound,1,,0,0
+21,rotation,0,,0,0
+,shot,1,rim,0,1
+,rebound,0,,0,1

@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HoopLab · AI assistant coach</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <div class="brand"><span class="ball"></span>HoopLab <small>AI assistant coach</small></div>
+  <div class="team-pick">
+    <select id="teamSelect"></select>
+    <button id="demoBtn" class="ghost">Load demo team</button>
+    <button id="newTeamBtn" class="ghost">+ Team</button>
+  </div>
+</header>
+<nav id="tabs">
+  <button data-tab="assistant" class="active">Assistant coach ✦</button>
+  <button data-tab="team">Team snapshot</button>
+  <button data-tab="players">Players</button>
+  <button data-tab="practice">Practice plan</button>
+  <button data-tab="homework">Homework</button>
+  <button data-tab="opponents">Opponents</button>
+  <button data-tab="data">Games &amp; video</button>
+</nav>
+<main>
+  <section id="tab-assistant" class="tab active"></section>
+  <section id="tab-team" class="tab"></section>
+  <section id="tab-players" class="tab"></section>
+  <section id="tab-practice" class="tab"></section>
+  <section id="tab-homework" class="tab"></section>
+  <section id="tab-opponents" class="tab"></section>
+  <section id="tab-data" class="tab"></section>
+  <div id="empty" class="empty hidden">
+    <h2>No team yet</h2>
+    <p>Load the demo team to explore, or create your own team and add players.</p>
+  </div>
+</main>
+<div id="modal" class="modal hidden"><div class="modal-box"><button class="ghost close" id="modalClose">✕</button><div id="modalBody"></div></div></div>
+<div id="toast" class="toast hidden"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>
