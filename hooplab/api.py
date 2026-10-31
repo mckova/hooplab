@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
 
-from . import ai, coach_ai, ingest, insights, llm, perception
+from . import ai, coach_ai, ingest, insights, llm, offline, perception
 from . import drills as dr
 from .agent import Agent, history
 from .db import DB, now_iso
@@ -596,7 +596,10 @@ def _ai_guard(fn, *args, **kw):
 def chat(team_id: int, body: ChatIn):
     """Talk to the assistant-coach agent (Claude + HoopLab tools)."""
     _get("teams", team_id)
-    return _ai_guard(Agent(db, team_id).chat, body.message, body.chat_id, body.context)
+    try:
+        return Agent(db, team_id).chat(body.message, body.chat_id, body.context)
+    except ai.AIUnavailable:          # no key: answer from the deterministic engine instead
+        return offline.reply(db, team_id, body.message, body.chat_id, body.context)
 
 
 @app.get("/api/teams/{team_id}/chats")
@@ -632,7 +635,10 @@ def notes(session_id: int, body: NotesIn, bg: BackgroundTasks):
     """Free-text coach notes (any language) -> events, via Claude structured outputs."""
     s = _get("sessions", session_id)
     players, opp = _session_players(s)
-    result = _ai_guard(perception.events_from_notes, body.notes, players, opp)
+    try:
+        result = perception.events_from_notes(body.notes, players, opp)
+    except ai.AIUnavailable:
+        result = offline.events_from_notes(body.notes, players)
     out = _store_ai(s, result, "notes")
     if out["stored"]:
         bg.add_task(_debrief_now, session_id)

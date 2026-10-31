@@ -9,7 +9,7 @@ description = "AI assistant coach for basketball: learns players from game & pra
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
-dependencies = ["fastapi>=0.110", "uvicorn>=0.29", "pydantic>=2.6", "numpy>=1.26", "python-multipart>=0.0.9"]
+dependencies = ["fastapi>=0.110", "uvicorn>=0.29", "pydantic>=2.6", "numpy>=1.26", "python-multipart>=0.0.9", "pillow>=10.1"]
 
 [project.optional-dependencies]
 vision = ["ultralytics>=8.3", "opencv-python-headless>=4.9"]

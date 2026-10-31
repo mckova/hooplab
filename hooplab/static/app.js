@@ -637,7 +637,7 @@ const RENDER = {
       }
       go("film", { focus: false });
     });
-    const aiOut = (r) => { $("#aiOut").innerHTML = `<p><b>${r.stored} events stored.</b></p>${r.observations?.length ? `<ul>${r.observations.map((o) => `<li dir="auto">${esc(o)}</li>`).join("")}</ul>` : ""}${r.unresolved?.length ? `<p class="soft">Could not place: ${r.unresolved.map(esc).join("; ")}</p>` : ""}`; };
+    const aiOut = (r) => { if (!$("#aiOut")) return; $("#aiOut").innerHTML = `<p><b>${r.stored} events stored.</b></p>${r.observations?.length ? `<ul>${r.observations.map((o) => `<li dir="auto">${esc(o)}</li>`).join("")}</ul>` : ""}${r.unresolved?.length ? `<p class="soft">Could not place: ${r.unresolved.map(esc).join("; ")}</p>` : ""}`; };
     $("#notesBtn").addEventListener("click", async () => {
       const sid = Number($("#sessPick")?.value), notes = $("#notesText").value;
       if (!sid || !notes.trim()) return toast("Pick a session and write what you saw");
@@ -706,7 +706,7 @@ function moments(clips) {
 
 async function filmReview(s, inbox, players) {
   const [r, clips] = await Promise.all([api(`/api/sessions/${s.id}/report`), s.has_video ? api(`/api/teams/${TEAM}/clips?session_id=${s.id}&limit=300`) : Promise.resolve([])]);
-  if (FILM !== s.id) return;
+  if (FILM !== s.id || !$("#review")) return;
   const num = Object.fromEntries(players.map((p) => [p.name, p.number]));
   const ms = moments(clips);
   const deb = inbox.find((i) => i.kind === "debrief" && i.ref?.session_id === s.id);
@@ -778,6 +778,7 @@ async function filmReview(s, inbox, players) {
   };
   const show = (i) => {
     if (i === cur) return; cur = i;
+    if (!$("#fvNow")) return;
     rows.forEach((b) => b.setAttribute("aria-current", String(Number(b.dataset.m) === i)));
     const m = ms[i];
     $("#fvNow").innerHTML = m ? `<b>${num[m.player] != null ? `#${esc(num[m.player])} ` : ""}${esc(first(m.player))}</b>, ${esc(m.what)}, ${clock(m.t0)}` : "";
@@ -785,6 +786,7 @@ async function filmReview(s, inbox, players) {
     $("#fvIdx").textContent = m ? `${i + 1} of ${ms.length}` : `${ms.length} moments`;
   };
   const tick = () => {
+    if (!$("#fvPh")) return;                      // the page changed under the video
     const t = v.currentTime, d = dur();
     $("#fvPh").style.left = `${Math.min(100, (t / d) * 100)}%`;
     $("#fvTime").textContent = clock(t);
@@ -792,7 +794,7 @@ async function filmReview(s, inbox, players) {
     let i = -1; ms.forEach((m, k) => { if (m.t0 <= t + 0.05) i = k; });
     show(i);
   };
-  const setPlaying = () => { const p = !v.paused; $("#fvPlay").innerHTML = p ? PAUSE_ICON : PLAY_ICON; $("#fvPlay").setAttribute("aria-label", p ? "Pause" : "Play"); };
+  const setPlaying = () => { if (!$("#fvPlay")) return; const p = !v.paused; $("#fvPlay").innerHTML = p ? PAUSE_ICON : PLAY_ICON; $("#fvPlay").setAttribute("aria-label", p ? "Pause" : "Play"); };
   const seek = (t) => { v.currentTime = Math.max(0, Math.min(dur(), t)); tick(); };
   v.addEventListener("loadedmetadata", () => { drawTicks(); tick(); });
   v.addEventListener("timeupdate", tick);
@@ -817,7 +819,7 @@ async function filmReview(s, inbox, players) {
 async function playerSheet(card) {
   const pid = card.player.id, p = card.player;
   const h = await api(`/api/players/${pid}/history`);
-  if (PLAYER !== pid) return;
+  if (PLAYER !== pid || !$("#sheet")) return;
   let dims = [...new Set([...card.focus, ...card.strengths.map((s) => s.dimension), h.most_improved])].filter(Boolean).slice(0, 3);
   const ctx = `Player: ${p.name} (#${p.number ?? "?"}, ${p.position})`;
   const groups = GROUPS.map(([g, label]) => {
@@ -863,6 +865,7 @@ async function playerSheet(card) {
   $("#pmMsg").addEventListener("click", async () => {
     $("#pmOut").innerHTML = `<p class="loading" aria-live="polite">Writing ${esc(first(p.name))}'s message…</p>`;
     const m = await api(`/api/players/${pid}/message?lang=${LANG()}`);
+    if (!$("#pmOut")) return;
     $("#pmOut").innerHTML = `<h2>Message to ${esc(first(p.name))}</h2><p class="note">${writtenBy(m.source)} Read it before you send it.</p><div class="msg-out" dir="auto">${esc(m.text)}</div>
       <div class="actions" style="margin-top:var(--s3)"><button type="button" class="btn line small" id="pmCopy">Copy</button><a class="btn line small" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(m.text)}">Open in WhatsApp</a></div>`;
     $("#pmCopy").addEventListener("click", async () => { await navigator.clipboard.writeText(m.text); toast("Copied"); });
@@ -887,7 +890,7 @@ async function playerSheet(card) {
 // ---------------------------------------------------------------- the opponent sheet
 async function opponentSheet(id) {
   const [m, pt] = await Promise.all([api(`/api/opponents/${id}/matchup`), api(`/api/opponents/${id}/play-types`)]);
-  if (OPP !== id) return;
+  if (OPP !== id || !$("#oppOut")) return;
   const o = m.opponent;
   const rows = m.comparison.map((r) => `<div>${esc(SHORT[r.dimension] || r.name)}</div>
     <div class="us"><i style="width:${(r.us || 0) * 100}%"></i><span>${pct(r.us)}</span></div>

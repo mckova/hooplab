@@ -169,8 +169,8 @@ def test_api_reports_ai_unavailable_cleanly(monkeypatch):
     importlib.reload(api)
     c = TestClient(api.app)
     tid = c.post("/api/teams", json={"name": "T"}).json()["id"]
-    r = c.post(f"/api/teams/{tid}/chat", json={"message": "hi"})
-    assert r.status_code == 503 and "ANTHROPIC_API_KEY" in r.json()["detail"]
+    r = c.post(f"/api/teams/{tid}/chat", json={"message": "hi"})     # no key: the offline assistant answers
+    assert r.status_code == 200 and r.json()["stop_reason"] == "offline" and "offline assistant" in r.json()["reply"]
     assert c.get("/api/health").json()["ai"] is False
     assert c.get(f"/api/teams/{tid}/briefing").json()["source"] == "template"
 
@@ -187,3 +187,19 @@ def test_agent_self_scout_and_playlist_tools(demo):
     assert "error" in r   # no film in this seed: the tool says so instead of inventing clips
     names = {t["name"] for t in ag.TOOLS}
     assert {"get_play_types", "build_playlist"} <= names
+
+
+def test_offline_assistant_and_notes_work_without_a_key(demo):
+    from hooplab import offline
+    db, tid = demo
+    r = offline.reply(db, tid, "Plan tomorrow: 60 minutes, half court", None, None)
+    assert "Practice plan, " in r["reply"] and r["chat_id"]
+    r2 = offline.reply(db, tid, "How is Noam doing?", r["chat_id"], None)
+    assert "Noam Levi" in r2["reply"] and r2["chat_id"] == r["chat_id"]
+    assert [m["role"] for m in ag.history(db, tid, r["chat_id"])] == ["user", "assistant", "user", "assistant"]
+    assert "homework" in offline.reply(db, tid, "assign homework", None, None)["reply"].lower()
+    players = db.q("SELECT * FROM players WHERE team_id = ?", (tid,))
+    out = offline.events_from_notes("Noam 3 of 5 from three. Ori had two turnovers. Ori did not sprint back twice.", players)
+    kinds = [(e["type"], e["outcome"]) for e in out["events"]]
+    assert kinds.count(("shot", True)) == 3 and kinds.count(("shot", False)) == 2
+    assert kinds.count(("turnover", False)) == 2 and kinds.count(("sprint", False)) == 2
