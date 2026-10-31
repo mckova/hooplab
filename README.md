@@ -97,6 +97,10 @@ Design decisions and how the system is validated: [docs/design.md](docs/design.m
 ## Run it
 
 ```bash
+pip install .
+hooplab --demo        # web app, API and demo team on http://localhost:8000
+
+# development
 pip install -e ".[dev]"
 uvicorn hooplab.api:app --reload
 # open http://localhost:8000 and click "open a demo team"
